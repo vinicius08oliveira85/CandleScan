@@ -1,0 +1,309 @@
+import express from "express";
+import path from "path";
+import { createServer as createViteServer } from "vite";
+import { GoogleGenAI, Type } from "@google/genai";
+import dotenv from "dotenv";
+
+dotenv.config();
+
+const app = express();
+const PORT = 3000;
+
+// Setup JSON body parsing with plenty of room for screenshots
+app.use(express.json({ limit: "50mb" }));
+app.use(express.urlencoded({ limit: "50mb", extended: true }));
+
+// Lazy initializer for Gemini client
+let ai: GoogleGenAI | null = null;
+function getGemini(): GoogleGenAI {
+  if (!ai) {
+    const key = process.env.GEMINI_API_KEY;
+    if (!key) {
+      throw new Error("A API key (GEMINI_API_KEY) não está configurada nos segredos locais. Acesse a guia Configurações > Segredos para adicioná-la.");
+    }
+    ai = new GoogleGenAI({
+      apiKey: key,
+      httpOptions: {
+        headers: {
+          'User-Agent': 'aistudio-build',
+        }
+      }
+    });
+  }
+  return ai;
+}
+
+const SYSTEM_INSTRUCTION = `Você é um analista profissional de trading amigável e focado em EXPLICAR DE FORMA SIMPLES para iniciantes e leigos.
+Sua função é analisar imagens (prints de gráficos de velas/candles enviados pelo usuário) e fornecer uma avaliação extremamente clara, prática e didática sobre o momento atual do preço do ativo.
+
+Siga rigorosamente estas diretrizes ao analisar a imagem do gráfico:
+1. Identifique a Direção Principal do Preço (Tendência):
+   - Alta (Subindo)
+   - Baixa (Caindo)
+   - Lateral (Sem rumo, andando de lado)
+2. Explique os desenhos das velas (Candles) recentes de forma simples e intuitiva para leigos usando analogias e comparações fáceis do cotidiano:
+   - Apresente as velas como um cabo de guerra: "Cada vela é uma disputa de força entre o Time Verde (Compradores, que empurram o preço para cima) e o Time Vermelho (Vendedores, que empurram para baixo)".
+   - Explique o "Corpo" (a parte gordinha e pintada da vela) como impulso e pressa: "Um corpo verde gordinho significa que o Time Verde correu livre com a bola para cima. Um corpo vermelho gordinho mostra que o Time Vermelho dominou e empurrou com muita pressa para baixo".
+   - Explique a "Sombra" ou "Pavio" (as linhas finas nas pontas das velas) como uma mola de empurrão ou rejeição: "A linha fina no topo ou fundo mostra que o preço tentou ir até lá, mas o outro time usou uma mola invisível para empurrá-lo de volta com força (isso se chama rejeição, mostrando que aquela região ficou cara ou barata demais). Um martelo é como um elástico que tentou esticar para baixo e voltou com tudo".
+   - Explique o "Doji" (vela em formato de cruz (+) com corpo quase nulo) como um empate total: "Doji é aquela velinha que parece uma cruz ou um hífen. Ela indica um empate perfeito no cabo de guerra, onde nenhum dos dois times conseguiu vencer o cabo, refletindo total dúvida e indecisão no mercado".
+   - Explique o "Engolfo" (uma vela grande que cobre totalmente a anterior) como um herói engolindo o rival: "É quando uma nova vela surge gigante e 'engole' a vela anterior inteira, mostrando um nocaute ou domínio absoluto e repentino daquele time".
+   - Explique o "Martelo" (Hammer) como uma mola de recuperação no fundo: "Tem um corpinho pequeno no topo e uma perninha longa para baixo. Mostra que o time vermelho chutou o preço para baixo, mas o time verde pegou um bastão pesado de mola e rebateu com tudo de volta antes do horário fechar. Isso indica força compradora no chão e chance de decolar para cima".
+   - Explique a "Estrela Cadente" (Shooting Star) como um balão que estourou no teto: "Tem um corpinho pequeno embaixo e um pavio longo espetado para cima. Mostra que o preço tentou decolar como um foguete, mas bateu com a cabeça em um teto e caiu de volta. Isso indica fraqueza dos compradores e chance de despencar ladeira abaixo".
+   - Explique o "Pião" (Spinning Top) como o pião de brinquedo zonzo: "É aquela vela com corpinho super pequeno bem no centro e pavios compridos simétricos para cima e para baixo. Mostra que o preço rodou feito pião tonto sem saber para onde ir, com compradores e vendedores exaustos. Indica indecisão extrema e que ninguém manda no preço no momento".
+3. Identifique as barreiras de preço chaves de forma descomplicada e 100% focado em analogias do cotidiano (Evite ao máximo palavras técnicas como "médias móveis", "médias ponderadas" ou "níveis"):
+   - Suporte: Apresente estritamente como "o chão que impede o preço de cair mais de onde ele está" (como um piso resistente onde o preço pisa e ganha apoio para subir).
+   - Resistência: Apresente estritamente como "o teto que impede o preço de subir mais de onde ele está" (como uma laje rígida de concreto onde o preço bate a cabeça e é empurrado para baixo).
+   - Detecção de Rompimento: Verifique se há um rompimento recente (preço racha e fura o chão de vez desabando em queda livre, ou racha e fura o teto de vez decolando alto).
+4. Avalie o ritmo / momento do mercado de forma simplista (Forte, fraco, indeciso, ou possível mudança de direção).
+5. Defina cenários fáceis de prever para as próximas horas (Cenário Provável).
+6. Recomende uma ação direta e muito amigável: "Comprar", "Vender" ou "Aguardar (Melhor não fazer nada agora)".
+7. Dê a estratégia mastigada para o iniciante apresentando os 'Tipos de Entrada' como 'Tipos de Terreno' lúdicos que você encontra sob os seus pés no gráfico:
+   - Rompimento de Suporte (Support Breakout): Apresente como "Entrar em terreno plano depois que o chão rachou e desabou de vez" (o preço quebrou a base de apoio e despencará livre).
+   - Rompimento de Resistência (Resistance Breakout): Apresente como "Entrar em terreno aberto livre depois que o teto rachou e foi estourado para cima" (o preço quebrou o limite de teto e disparará livre).
+   - Pullback de Retração: Apresente como "Pisar de leve no chão recém-testado após o preço recuar para checar a segurança das fundações" (o preço volta a escorregar para testar a estabilidade do novo chão ou novo teto).
+   - Reversão de Forças: Apresente como "Subir ou descer a encosta íngreme exatamente quando o vento muda de lado repentinamente" (o preço cansou de subir e vira ladeira abaixo, ou cansou de cair e decola ladeira acima).
+   - Sem Entrada: Apresente como "Pântano de areia movediça sem direção confiável (Melhor não pisar agora)"
+   - Ponto ideal de entrada (Qual preço aproximado comprar/vender)
+   - Limite de Segurança (Stop loss): Explique como "O cinto de segurança se der errado, para evitar perdas"
+   - Alvo de Ganho (Take profit): Explique como "A meta de onde colocar o lucro no bolso"
+8. Atribua um Nível de Confiança objetivo (Baixo, Médio ou Alto).
+9. Classifique se há um rompimento de suporte ou resistência e comente sobre o mesmo.
+
+ATENÇÃO: Nunca invente dados que não estejam claramente visíveis na tela do gráfico. Use uma comunicação calorosa, empática, parecendo um professor paciente ensinando uma pessoa querida do zero.`;
+
+// API Endpoint to analyze screenshots of charts
+app.post("/api/analyze", async (req, res) => {
+  try {
+    const { images } = req.body;
+    if (!images || !Array.isArray(images) || images.length === 0) {
+      return res.status(400).json({ error: "Nenhuma imagem foi recebida para análise técnica." });
+    }
+
+    const aiInstance = getGemini();
+
+    // Prepare content parts for Gemini
+    const contents: any[] = [];
+    
+    // Add text prompt giving instructions and context
+    let promptText = "Por favor, faça uma análise técnica minuciosa deste gráfico de candles enviado. ";
+    if (images.length > 1) {
+      promptText += "Você recebeu múltiplos tempos gráficos para analisar em conjunto. Analise todos e compare-os.";
+    }
+    contents.push({ text: promptText });
+
+    // Append multiple base64 images as parts if supplied
+    for (const img of images) {
+      if (!img.data || !img.mimeType) {
+        continue;
+      }
+      
+      // Clean prefix if present in the base64 string
+      const cleanData = img.data.replace(/^data:image\/\w+;base64,/, "");
+      
+      contents.push({
+        inlineData: {
+          data: cleanData,
+          mimeType: img.mimeType
+        }
+      });
+    }
+
+    // Call Gemini with schema configuration
+    const response = await aiInstance.models.generateContent({
+      model: "gemini-3.5-flash",
+      contents: { parts: contents },
+      config: {
+        systemInstruction: SYSTEM_INSTRUCTION,
+        responseMimeType: "application/json",
+        responseSchema: {
+          type: Type.OBJECT,
+          properties: {
+            ativoCooptado: { type: Type.STRING, description: "Ticker ou nome do ativo detectado no gráfico (ex: CSED3, PETR4, EUR/USD), ou 'Não detectado'" },
+            tempoGrafico: { type: Type.STRING, description: "Tempo gráfico detectado (ex: 15 Minutos, 5 Minutos, Diário), ou 'Não detectado'" },
+            tendencia: { type: Type.STRING, description: "Tendência principal observada: Alta, Baixa ou Lateral" },
+            momento: { type: Type.STRING, description: "Momento do mercado: Forte, fraco, indeciso, reversão possível" },
+            leituraCandles: { type: Type.STRING, description: "Explicação dos candles recentes de forma lúdica e ultra simples sobre as forças do mercado (usando as analogias descritas de cabo de guerra entre Time Verde e Time Vermelho, molas de empurrão, empates, etc. para leigos)." },
+            suporte: { type: Type.STRING, description: "Explicação simples do Suporte focado em ser o 'chão que impede o preço de cair mais' de onde ele está (ex: '$4,32 - chão firme de apoio onde o preço para de cair'). Evite 'médias móveis' ou termos complexos." },
+            resistencia: { type: Type.STRING, description: "Explicação simples da Resistência focalizando em ser o 'teto que impede o preço de subir mais' do que aquilo (ex: '$4,38 - teto forte que limita os avanços de preço'). Evite termos complexos." },
+            cenarioProvavel: { type: Type.STRING, description: "O cenário técnico mais provável de se concretizar a curtíssimo prazo" },
+            acaoRecomendada: { type: Type.STRING, description: "Ação sugerida: 'Comprar', 'Vender' ou 'Aguardar'" },
+            tipoEntrada: { type: Type.STRING, description: "Tipo recomendado de entrada apresentado em forma de 'tipo de terreno' lúdico no gráfico usando as analogias descritas (ex: 'Entrar em terreno plano depois que o chão rachou' para rompimento de suporte, ou 'Pisar de leve no chão recém-testado' para pullback, ou 'Subir ou descer a encosta íngreme quando o vento de forças vira' para reversão, ou 'Pântano movesco sem direção confiável' para sem entrada)" },
+            pontoEntrada: { type: Type.STRING, description: "Ponto ideal exato de entrada sugerido" },
+            stopLoss: { type: Type.STRING, description: "Stop loss sugerido para controle de risco" },
+            alvo: { type: Type.STRING, description: "Alvo ideal de saída (Take Profit)" },
+            nivelConfianca: { type: Type.STRING, description: "Nível de confiança da análise técnica: Baixo, Médio ou Alto" },
+            comentarioAnalista: { type: Type.STRING, description: "Um comentário do mentor direto para o trader sobre armadilhas locais ou gestão de risco" },
+            rompimentoDetectado: { type: Type.BOOLEAN, description: "Defina como true se o preço rompeu recentemente ou está rompendo um suporte (piso) ou resistência (teto) importante; caso contrário, false" },
+            rompimentoComentario: { type: Type.STRING, description: "Breve explicação/comentário sobre a força e direção deste rompimento (ex: 'Rompimento forte de teto sustentado por velas verdes volumosas' ou 'Piso quebrado com muita agressividade'), ou vazio se rompimentoDetectado for false" }
+          },
+          required: [
+            "ativoCooptado", "tempoGrafico", "tendencia", "momento", "leituraCandles",
+            "suporte", "resistencia", "cenarioProvavel", "acaoRecomendada", 
+            "tipoEntrada", "pontoEntrada", "stopLoss", "alvo", "nivelConfianca", 
+            "comentarioAnalista", "rompimentoDetectado", "rompimentoComentario"
+          ]
+        }
+      }
+    });
+
+    const textOutput = response.text;
+    if (!textOutput) {
+      throw new Error("O modelo Gemini de inteligência artificial retornou uma resposta vazia.");
+    }
+
+    try {
+      const parsed = JSON.parse(textOutput.trim());
+      return res.json(parsed);
+    } catch (parseError) {
+      console.error("Falha ao analisar JSON retornado pelo Gemini:", textOutput, parseError);
+      return res.status(500).json({ 
+        error: "Resposta do modelo não pôde ser convertida para uma estrutura de dados válida.",
+        raw: textOutput 
+      });
+    }
+
+  } catch (err: any) {
+    console.error("Erro na rota /api/analyze:", err);
+    return res.status(500).json({ 
+      error: err.message || "Ocorreu um erro interno na análise do gráfico." 
+    });
+  }
+});
+
+const MULTI_SYSTEM_INSTRUCTION = `Você é um analista profissional de trading amigável e focado em EXPLICAR DE FORMA SIMPLES para iniciantes e leigos.
+Sua função é analisar dois prints de gráficos simultaneamente: um gráfico de 5 minutos (M5) e um de 15 minutos (M15) do MESMO ativo financeiro.
+Você deve explicar detalhadamente como esses dois tempos gráficos se complementam ou contrastam para orientar o trader iniciante na tomada de decisão.
+
+Para a explicação:
+- Apresente o gráfico de 15 minutos como o "Binóculo" do mercado: ele dá o panorama geral, a maré macro, mostrando para onde a maré maior está empurrando o preço.
+- Apresente o gráfico de 5 minutos como a "Lupa": ele foca nos detalhes microscópicos, nos galhos, mostrando o preço exato de desconto ou os primeiros sinais de fadiga e viradas de curto prazo.
+- Explique se as tendências estão alinhadas (M5 e M15 na mesma direção) ou divergentes (ex: M15 subindo e M5 respirando/caindo para retestar suporte, o que configura compra de desconto).
+- Use linguagem extremamente lúdica, recorrendo às analogias dos lances de cabo de guerra (Time Verde vs Time Vermelho), molas e colchões (piso/suporte e teto/resistência).`;
+
+app.post("/api/analyze-multi", async (req, res) => {
+  try {
+    const { m5Image, m15Image } = req.body;
+    if (!m5Image || !m15Image) {
+      return res.status(400).json({ error: "Ambos os gráficos de M5 e M15 são obrigatórios para a análise simultânea." });
+    }
+
+    const aiInstance = getGemini();
+
+    const contents: any[] = [
+      { text: "Por favor, analise simultaneamente estes dois gráficos do mesmo ativo: o primeiro é de 5 minutos (M5) e o segundo é de 15 minutos (M15). Produza uma comparação side-by-side integrando as duas perspectivas." }
+    ];
+
+    // Clean prefix for M5 base64
+    const cleanDataM5 = m5Image.replace(/^data:image\/\w+;base64,/, "");
+    contents.push({
+      inlineData: {
+        data: cleanDataM5,
+        mimeType: "image/png"
+      }
+    });
+
+    // Clean prefix for M15 base64
+    const cleanDataM15 = m15Image.replace(/^data:image\/\w+;base64,/, "");
+    contents.push({
+      inlineData: {
+        data: cleanDataM15,
+        mimeType: "image/png"
+      }
+    });
+
+    const response = await aiInstance.models.generateContent({
+      model: "gemini-3.5-flash",
+      contents: { parts: contents },
+      config: {
+        systemInstruction: MULTI_SYSTEM_INSTRUCTION,
+        responseMimeType: "application/json",
+        responseSchema: {
+          type: Type.OBJECT,
+          properties: {
+            ativoCooptado: { type: Type.STRING, description: "O nome ou ticker do ativo lido (ex: PETR4, WINM26, etc)" },
+            comparativoAnalise: { type: Type.STRING, description: "Explicação minuciosa cruzando os dados do M5 e do M15. Explique a teoria da lupa (M5) e do binóculo (M15), destacando se há alinhamento ou divergência saudável de forças." },
+            conclusaoDecisao: { type: Type.STRING, description: "Orientação final e clara unindo as duas leituras para orientar a operação ideal." },
+            acaoRecomendada: { type: Type.STRING, description: "'Comprar', 'Vender' ou 'Aguardar'" },
+            pontoEntrada: { type: Type.STRING, description: "Ponto exato ideal de entrada" },
+            stopLoss: { type: Type.STRING, description: "Stop loss sugerido protetor" },
+            alvo: { type: Type.STRING, description: "Alvo ideal / Take profit" },
+            nivelConfianca: { type: Type.STRING, description: "Nível de confiança técnica: Baixo, Médio ou Alto" },
+            comentarioAnalista: { type: Type.STRING, description: "O conselho do mentor do trading sobre alinhamento de tempos gráficos." },
+            m5: {
+              type: Type.OBJECT,
+              properties: {
+                tendencia: { type: Type.STRING, description: "Tendência principal no M5: Alta, Baixa ou Lateral" },
+                momento: { type: Type.STRING, description: "Momento no M5 (ex: corrigindo, exaurido, rompendo)" },
+                leituraCandles: { type: Type.STRING, description: "Explicação lúdica das velinhas do M5 para iniciantes" },
+                suporte: { type: Type.STRING, description: "O suporte/chão chave de M5" },
+                resistencia: { type: Type.STRING, description: "A resistência/teto chave de M5" }
+              },
+              required: ["tendencia", "momento", "leituraCandles", "suporte", "resistencia"]
+            },
+            m15: {
+              type: Type.OBJECT,
+              properties: {
+                tendencia: { type: Type.STRING, description: "Tendência principal no M15: Alta, Baixa ou Lateral" },
+                momento: { type: Type.STRING, description: "Momento no M15" },
+                leituraCandles: { type: Type.STRING, description: "Explicação lúdica das velinhas do M15" },
+                suporte: { type: Type.STRING, description: "O suporte/chão de M15" },
+                resistencia: { type: Type.STRING, description: "A resistência/teto de M15" }
+              },
+              required: ["tendencia", "momento", "leituraCandles", "suporte", "resistencia"]
+            }
+          },
+          required: [
+            "ativoCooptado", "comparativoAnalise", "conclusaoDecisao", "acaoRecomendada",
+            "pontoEntrada", "stopLoss", "alvo", "nivelConfianca", "comentarioAnalista",
+            "m5", "m15"
+          ]
+        }
+      }
+    });
+
+    const textOutput = response.text;
+    if (!textOutput) {
+      throw new Error("O modelo Gemini de inteligência artificial retornou uma resposta vazia na análise multi-tempo.");
+    }
+
+    try {
+      const parsed = JSON.parse(textOutput.trim());
+      return res.json(parsed);
+    } catch (parseError) {
+      console.error("Falha ao analisar JSON retornado pelo Gemini no multi-tempo:", textOutput, parseError);
+      return res.status(500).json({ 
+        error: "Resposta do modelo não pôde ser convertida para uma estrutura de dados de multi-tempo.",
+        raw: textOutput 
+      });
+    }
+  } catch (err: any) {
+    console.error("Erro na rota /api/analyze-multi:", err);
+    return res.status(500).json({ 
+      error: err.message || "Ocorreu um erro interno na análise múltipla dos gráficos." 
+    });
+  }
+});
+
+// Setup client serving
+async function startServer() {
+  if (process.env.NODE_ENV !== "production") {
+    const vite = await createViteServer({
+      server: { middlewareMode: true },
+      appType: "spa",
+    });
+    app.use(vite.middlewares);
+  } else {
+    const distPath = path.join(process.cwd(), 'dist');
+    app.use(express.static(distPath));
+    // Serve index.html for SPA router fallbacks
+    app.get('*', (req, res) => {
+      res.sendFile(path.join(distPath, 'index.html'));
+    });
+  }
+
+  app.listen(PORT, "0.0.0.0", () => {
+    console.log(`[🚀 Analista de Candles] Servidor rodando em http://localhost:${PORT}`);
+  });
+}
+
+startServer();

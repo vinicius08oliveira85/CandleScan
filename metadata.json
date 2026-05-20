@@ -1,0 +1,6 @@
+{
+  "name": "Analista de Trading - Leitura de Candles",
+  "description": "Análise técnica profissional de candles em tempo real de curto prazo para day trade e scalping.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
