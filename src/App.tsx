@@ -83,6 +83,7 @@ export default function App() {
   
   const [geminiApiKey, setGeminiApiKey] = useState<string>("");
   const [showApiKey, setShowApiKey] = useState(false);
+  const [serverHasGeminiKey, setServerHasGeminiKey] = useState<boolean | null>(null);
   // Interactive full-screen preview state
   const [previewImage, setPreviewImage] = useState<string | null>(null);
   const [copiedField, setCopiedField] = useState<string | null>(null);
@@ -164,6 +165,24 @@ export default function App() {
     setHistory(loadHistoryFromStorage());
   }, []);
 
+  useEffect(() => {
+    fetch("/api/health")
+      .then((r) => (r.ok ? r.json() : null))
+      .then((data) => setServerHasGeminiKey(!!data?.geminiConfigured))
+      .catch(() => setServerHasGeminiKey(false));
+  }, []);
+
+  const getResolvedApiKey = useCallback(() => {
+    try {
+      return geminiApiKey.trim() || localStorage.getItem("geminiApiKey")?.trim() || "";
+    } catch {
+      return geminiApiKey.trim();
+    }
+  }, [geminiApiKey]);
+
+  const canRunAnalysis = () =>
+    !!getResolvedApiKey() || serverHasGeminiKey === true;
+
   const handleSaveApiKey = () => {
     const trimmed = geminiApiKey.trim();
     try {
@@ -188,6 +207,15 @@ export default function App() {
   const openSettingsTab = () => {
     setActiveTab("settings");
     setShowSettingsTab(true);
+  };
+
+  const ensureApiKeyForAnalysis = (): boolean => {
+    if (canRunAnalysis()) return true;
+    setAnalysisError(
+      "Chave API do Gemini não configurada. Abra a aba Configurações, cole sua chave do Google AI Studio e clique em Salvar — ou peça ao administrador para definir GEMINI_API_KEY na Vercel."
+    );
+    openSettingsTab();
+    return false;
   };
 
   const parseInvestedNumber = (value: string) => {
@@ -331,7 +359,7 @@ export default function App() {
     }));
     const dadosCompra = buildDadosCompra();
 
-    const trimmedKey = geminiApiKey.trim();
+    const trimmedKey = getResolvedApiKey();
     const res = await fetch("/api/analyze", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -343,13 +371,21 @@ export default function App() {
     });
 
     if (!res.ok) {
-      const errJson = await res.json().catch(() => ({}));
+      const errJson = await res.json().catch(() => ({})) as {
+        error?: string;
+        code?: string;
+      };
+      if (errJson.code === "MISSING_API_KEY" || res.status === 400) {
+        openSettingsTab();
+      }
       const statusHint =
-        res.status === 405
+        errJson.code === "MISSING_API_KEY"
+          ? "Cole sua chave em Configurações e clique em Salvar Chave API."
+          : res.status === 405
           ? "A rota /api/analyze não está ativa no servidor (deploy). Confira o backend na Vercel."
           : res.status === 401 || res.status === 403
-          ? "Chave API inválida ou sem permissão."
-          : "Configure a chave Gemini em Configurações ou GEMINI_API_KEY no servidor.";
+          ? "Chave API inválida ou sem permissão. Gere uma nova chave no Google AI Studio."
+          : "Verifique a chave em Configurações ou GEMINI_API_KEY na Vercel.";
       throw new Error(
         errJson.error || `Erro do servidor (${res.status}). ${statusHint}`
       );
@@ -375,6 +411,7 @@ export default function App() {
       setAnalysisError("Por favor, faça upload de pelo menos um print de gráfico (M5 ou M15) antes de analisar.");
       return;
     }
+    if (!ensureApiKeyForAnalysis()) return;
 
     setIsAnalyzing(true);
     setAnalysisError(null);
@@ -403,6 +440,8 @@ export default function App() {
     }
 
     const newPhotos = uploadedPhotos.slice(baselinePhotoCount);
+    if (!ensureApiKeyForAnalysis()) return;
+
     setIsAnalyzing(true);
     setAnalysisError(null);
 
@@ -1611,9 +1650,8 @@ CandleScan FÁCIL • Análise didática com IA — use sempre stop loss.
             </label>
 
             <p className="text-[11px] text-zinc-500 leading-relaxed">
-              A chave é enviada apenas nas requisições de análise para o seu servidor e tem prioridade
-              sobre a variável de ambiente do backend. Nunca compartilhe a chave em prints ou redes
-              sociais. Crie ou revogue chaves em{" "}
+              A chave fica só no seu navegador e é enviada ao analisar o gráfico (prioridade sobre a
+              chave do servidor). Crie em{" "}
               <a
                 href="https://aistudio.google.com/app/apikey"
                 target="_blank"
@@ -1622,9 +1660,22 @@ CandleScan FÁCIL • Análise didática com IA — use sempre stop loss.
               >
                 Google AI Studio
               </a>
-              . Se o servidor já tiver <code className="text-zinc-400">GEMINI_API_KEY</code>, você pode
-              deixar em branco aqui.
+              . Alternativa: definir <code className="text-zinc-400">GEMINI_API_KEY</code> em
+              Vercel → Settings → Environment Variables.
             </p>
+
+            {serverHasGeminiKey === true && !getResolvedApiKey() && (
+              <p className="text-[11px] text-emerald-400/90 bg-emerald-500/10 border border-emerald-500/30 rounded-lg px-3 py-2">
+                O servidor (Vercel) já tem GEMINI_API_KEY. Você pode analisar sem preencher aqui — ou
+                cole sua chave pessoal para usar a sua cota.
+              </p>
+            )}
+            {serverHasGeminiKey === false && !getResolvedApiKey() && (
+              <p className="text-[11px] text-amber-300/90 bg-amber-500/10 border border-amber-500/30 rounded-lg px-3 py-2">
+                Nenhuma chave detectada no servidor nem neste navegador. Cole sua chave abaixo e
+                clique em Salvar antes de traduzir o gráfico.
+              </p>
+            )}
 
             <div className="flex flex-wrap gap-2">
               <button
@@ -1635,11 +1686,15 @@ CandleScan FÁCIL • Análise didática com IA — use sempre stop loss.
                 <CheckCircle className="h-4 w-4" />
                 Salvar Chave API
               </button>
-              {geminiApiKey.trim() && (
+              {getResolvedApiKey() ? (
                 <span className="text-[10px] self-center text-emerald-400/90 font-mono">
-                  ● chave preenchida
+                  ● chave salva neste dispositivo
                 </span>
-              )}
+              ) : serverHasGeminiKey ? (
+                <span className="text-[10px] self-center text-sky-400/90 font-mono">
+                  ● usando chave do servidor
+                </span>
+              ) : null}
             </div>
           </div>
         </div>

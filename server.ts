@@ -14,12 +14,18 @@ app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ limit: '50mb', extended: true }));
 
 /** Prioridade: chave do usuário (body) > GEMINI_API_KEY do ambiente */
+function resolveGeminiApiKey(userApiKey?: string): string {
+  return (userApiKey?.trim() || process.env.GEMINI_API_KEY || '').trim();
+}
+
 function getGemini(userApiKey?: string): GoogleGenAI {
-  const key = (userApiKey?.trim() || process.env.GEMINI_API_KEY || '').trim();
+  const key = resolveGeminiApiKey(userApiKey);
   if (!key) {
-    throw new Error(
-      'Nenhuma chave API do Gemini encontrada. Salve sua chave em Configurações no app ou defina GEMINI_API_KEY no servidor.'
-    );
+    const err = new Error(
+      'Nenhuma chave API do Gemini encontrada. Abra Configurações no app e cole sua chave, ou defina GEMINI_API_KEY na Vercel.'
+    ) as Error & { code?: string };
+    err.code = 'MISSING_API_KEY';
+    throw err;
   }
   return new GoogleGenAI({
     apiKey: key,
@@ -113,6 +119,13 @@ EVOLUÇÃO DE PRINTS (múltiplas imagens em ordem):
 - Descreva brevemente como o preço evoluiu entre os prints antes de dar a recomendação final.
 
 ATENÇÃO: Nunca invente dados que não estejam claramente visíveis na tela do gráfico. Use uma comunicação calorosa, empática, parecendo um professor paciente ensinando uma pessoa querida do zero.`;
+
+app.get('/api/health', (_req, res) => {
+  res.json({
+    ok: true,
+    geminiConfigured: !!resolveGeminiApiKey(),
+  });
+});
 
 // API Endpoint to analyze screenshots of charts
 app.post('/api/analyze', async (req, res) => {
@@ -226,8 +239,14 @@ app.post('/api/analyze', async (req, res) => {
 
   } catch (err: any) {
     console.error('Erro na rota /api/analyze:', err);
-    return res.status(500).json({ 
-      error: err.message || 'Ocorreu um erro interno na análise do gráfico.' 
+    if (err?.code === 'MISSING_API_KEY' || /Nenhuma chave API/i.test(err?.message || '')) {
+      return res.status(400).json({
+        error: err.message,
+        code: 'MISSING_API_KEY',
+      });
+    }
+    return res.status(500).json({
+      error: err.message || 'Ocorreu um erro interno na análise do gráfico.',
     });
   }
 });
