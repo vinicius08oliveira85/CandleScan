@@ -152,6 +152,10 @@ export function buildGeminiParts(promptText: string, images: ImageInput[]) {
   return parts;
 }
 
+/** Modelo padrão na API Google AI (1.5-flash foi descontinuado na v1beta). */
+export const DEFAULT_GEMINI_MODEL =
+  (typeof process !== 'undefined' && process.env?.GEMINI_MODEL?.trim()) || 'gemini-2.0-flash';
+
 export async function generateGeminiJson(
   ai: GoogleGenerativeAI,
   systemInstruction: string,
@@ -159,7 +163,7 @@ export async function generateGeminiJson(
   responseSchema: typeof CHART_ANALYSIS_SCHEMA
 ): Promise<string> {
   const model = ai.getGenerativeModel({
-    model: 'gemini-1.5-flash',
+    model: DEFAULT_GEMINI_MODEL,
     systemInstruction,
   });
 
