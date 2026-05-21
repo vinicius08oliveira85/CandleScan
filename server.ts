@@ -1,7 +1,14 @@
 import express from 'express';
 import path from 'path';
-import { GoogleGenAI, Type } from '@google/genai';
 import dotenv from 'dotenv';
+import {
+  resolveGeminiApiKey,
+  getGeminiClient,
+  buildGeminiParts,
+  generateGeminiJson,
+  CHART_ANALYSIS_SCHEMA,
+  MULTI_ANALYSIS_SCHEMA,
+} from './shared/geminiSchemas';
 
 try {
   dotenv.config({ path: '.env.local' });
@@ -16,30 +23,6 @@ const port = 3000;
 // Setup JSON body parsing with plenty of room for screenshots
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ limit: '50mb', extended: true }));
-
-/** Prioridade: chave do usuário (body) > GEMINI_API_KEY do ambiente */
-function resolveGeminiApiKey(userApiKey?: string): string {
-  return (userApiKey?.trim() || process.env.GEMINI_API_KEY || '').trim();
-}
-
-function getGemini(userApiKey?: string): GoogleGenAI {
-  const key = resolveGeminiApiKey(userApiKey);
-  if (!key) {
-    const err = new Error(
-      'Nenhuma chave API do Gemini encontrada. Abra Configurações no app e cole sua chave, ou defina GEMINI_API_KEY na Vercel.'
-    ) as Error & { code?: string };
-    err.code = 'MISSING_API_KEY';
-    throw err;
-  }
-  return new GoogleGenAI({
-    apiKey: key,
-    httpOptions: {
-      headers: {
-        'User-Agent': 'aistudio-build',
-      },
-    },
-  });
-}
 
 const SYSTEM_INSTRUCTION = `Você é um analista profissional de trading amigável e focado em EXPLICAR DE FORMA SIMPLES para iniciantes e leigos.
 Sua função é analisar imagens (prints de gráficos de velas/candles enviados pelo usuário) e fornecer uma avaliação extremamente clara, prática e didática sobre o momento atual do preço do ativo.
@@ -125,7 +108,7 @@ EVOLUÇÃO DE PRINTS (múltiplas imagens em ordem):
 ATENÇÃO: Nunca invente dados que não estejam claramente visíveis na tela do gráfico. Use uma comunicação calorosa, empática, parecendo um professor paciente ensinando uma pessoa querida do zero.`;
 
 const healthHandler = (_req: express.Request, res: express.Response) => {
-  res.json({
+  res.status(200).json({
     ok: true,
     geminiConfigured: !!resolveGeminiApiKey(),
     vercelEnv: process.env.VERCEL_ENV || 'local',
@@ -143,12 +126,8 @@ const analyzeHandler = async (req: express.Request, res: express.Response) => {
       return res.status(400).json({ error: 'Nenhuma imagem foi recebida para análise técnica.' });
     }
 
-    const aiInstance = getGemini(apiKey);
+    const aiInstance = getGeminiClient(apiKey);
 
-    // Prepare content parts for Gemini
-    const contents: any[] = [];
-    
-    // Add text prompt giving instructions and context
     let promptText = 'Por favor, faça uma análise técnica minuciosa deste gráfico de candles enviado. ';
     if (images.length > 1) {
       promptText += `Você recebeu ${images.length} prints do MESMO ativo em ORDEM CRONOLÓGICA (do mais antigo ao mais recente). O ÚLTIMO print é o momento ATUAL do mercado. Compare a evolução do preço entre eles antes de recomendar.`;
@@ -156,80 +135,14 @@ const analyzeHandler = async (req: express.Request, res: express.Response) => {
     if (dadosCompra?.precoEntrada && dadosCompra?.quantidade) {
       promptText += ` MODO GERENTE DE TRADE ATIVO: o investidor comprou a ${dadosCompra.precoEntrada} com quantidade ${dadosCompra.quantidade}. Compare o gráfico atual com esse preço pago, preencha statusTrade e use o formato obrigatório no comentarioAnalista.`;
     }
-    contents.push({ text: promptText });
 
-    // Append multiple base64 images as parts if supplied
-    for (const img of images) {
-      if (!img.data || !img.mimeType) {
-        continue;
-      }
-      
-      // Clean prefix if present in the base64 string
-      const cleanData = img.data.replace(/^data:image\/\w+;base64,/, '');
-      
-      contents.push({
-        inlineData: {
-          data: cleanData,
-          mimeType: img.mimeType
-        }
-      });
-    }
-
-    // Call Gemini with schema configuration
-    const response = await aiInstance.models.generateContent({
-      model: 'gemini-1.5-flash',
-      contents: { parts: contents },
-      config: {
-        systemInstruction: SYSTEM_INSTRUCTION,
-        responseMimeType: 'application/json',
-        responseSchema: {
-          type: Type.OBJECT,
-          properties: {
-            ativoCooptado: { type: Type.STRING, description: "Ticker ou nome do ativo detectado no gráfico (ex: CSED3, PETR4, EUR/USD), ou 'Não detectado'" },
-            tempoGrafico: { type: Type.STRING, description: "Tempo gráfico detectado (ex: 15 Minutos, 5 Minutos, Diário), ou 'Não detectado'" },
-            tendencia: { type: Type.STRING, description: 'Tendência principal observada: Alta, Baixa ou Lateral' },
-            momento: { type: Type.STRING, description: 'Momento do mercado: Forte, fraco, indeciso, reversão possível' },
-            leituraCandles: { type: Type.STRING, description: 'Explicação dos candles recentes de forma lúdica e ultra simples sobre as forças do mercado (usando as analogias descritas de cabo de guerra entre Time Verde e Time Vermelho, molas de empurrão, empates, etc. para leigos).' },
-            suporte: { type: Type.STRING, description: "Explicação simples do Suporte focado em ser o 'chão que impede o preço de cair mais' de onde ele está (ex: '$4,32 - chão firme de apoio onde o preço para de cair'). Evite 'médias móveis' ou termos complexos." },
-            resistencia: { type: Type.STRING, description: "Explicação simples da Resistência focalizando em ser o 'teto que impede o preço de subir mais' do que aquilo (ex: '$4,38 - teto forte que limita os avanços de preço'). Evite termos complexos." },
-            cenarioProvavel: { type: Type.STRING, description: 'O cenário técnico mais provável de se concretizar a curtíssimo prazo' },
-            acaoRecomendada: { type: Type.STRING, description: "Ação sugerida: 'Comprar', 'Vender' ou 'Aguardar'" },
-            tipoEntrada: { type: Type.STRING, description: "Tipo recomendado de entrada apresentado em forma de 'tipo de terreno' lúdico no gráfico usando as analogias descritas (ex: 'Entrar em terreno plano depois que o chão rachou' para rompimento de suporte, ou 'Pisar de leve no chão recém-testado' para pullback, ou 'Subir ou descer a encosta íngreme quando o vento de forças vira' para reversão, ou 'Pântano movesco sem direção confiável' para sem entrada)" },
-            pontoEntrada: { type: Type.STRING, description: 'Preço de entrada no formato "R$ X,XX" ou "$X.XX" seguido de explicação opcional entre parênteses' },
-            stopLoss: { type: Type.STRING, description: 'Stop loss no formato "R$ X,XX" ou "$X.XX" seguido de explicação opcional entre parênteses' },
-            alvo: { type: Type.STRING, description: 'Take profit no formato "R$ X,XX" ou "$X.XX" seguido de explicação opcional entre parênteses' },
-            nivelConfianca: { type: Type.STRING, description: 'Baixo, Médio ou Alto — baseado principalmente na nitidez visual dos candles e legibilidade dos preços na imagem' },
-            relacaoRiscoRetorno: { type: Type.STRING, description: 'Relação risco/retorno estimada no formato "1:X — viável/equilibrada/fraca" com breve justificativa lúdica' },
-            comentarioAnalista: { type: Type.STRING, description: 'Conselho do mentor. Sem posição: incluir "Se perder, você perde X; se ganhar, você ganha Y". Com dadosCompra: "Você comprou a X, o preço está em Y. Seu lucro/prejuízo atual é Z. Recomendo [ação] porque [motivo técnico]"' },
-            precoAtualEstimado: { type: Type.STRING, description: 'Preço atual do ativo no print mais recente, formato "R$ X,XX" ou "$X.XX"' },
-            statusTrade: { type: Type.STRING, description: 'Somente com posição aberta: "MANTER", "VENDER AGORA", "REALIZAR PARCIAL" ou "STOP ATIVADO"' },
-            syntheticCandles: { 
-              type: Type.ARRAY, 
-              items: {
-                type: Type.OBJECT,
-                properties: {
-                  open: { type: Type.NUMBER },
-                  high: { type: Type.NUMBER },
-                  low: { type: Type.NUMBER },
-                  close: { type: Type.NUMBER }
-                }
-              },
-              description: "Exatamente 10 candles OHLC numericamente proporcionais aos últimos 10 candles visíveis na imagem (ordem cronológica; o último é o mais recente)."
-            },
-            rompimentoDetectado: { type: Type.BOOLEAN, description: "Defina como true se o preço rompeu recentemente ou está rompendo um suporte (piso) ou resistência (teto) importante; caso contrário, false" },
-            rompimentoComentario: { type: Type.STRING, description: "Breve explicação/comentário sobre a força e direção deste rompimento (ex: 'Rompimento forte de teto sustentado por velas verdes volumosas' ou 'Piso quebrado com muita agressividade'), ou vazio se rompimentoDetectado for false" }
-          },
-          required: [
-            'ativoCooptado', 'tempoGrafico', 'tendencia', 'momento', 'leituraCandles',
-            'suporte', 'resistencia', 'cenarioProvavel', 'acaoRecomendada', 
-            'tipoEntrada', 'pontoEntrada', 'stopLoss', 'alvo', 'nivelConfianca', 'relacaoRiscoRetorno',
-            'comentarioAnalista', 'rompimentoDetectado', 'rompimentoComentario', 'syntheticCandles'
-          ]
-        }
-      }
-    });
-
-    const textOutput = response.text;
+    const parts = buildGeminiParts(promptText, images);
+    const textOutput = await generateGeminiJson(
+      aiInstance,
+      SYSTEM_INSTRUCTION,
+      parts,
+      CHART_ANALYSIS_SCHEMA
+    );
     if (!textOutput) {
       throw new Error('O modelo Gemini de inteligência artificial retornou uma resposta vazia.');
     }
@@ -279,81 +192,22 @@ app.post('/api/analyze-multi', async (req, res) => {
       return res.status(400).json({ error: 'Ambos os gráficos de M5 e M15 são obrigatórios para a análise simultânea.' });
     }
 
-    const aiInstance = getGemini(apiKey);
+    const aiInstance = getGeminiClient(apiKey);
 
-    const contents: any[] = [
-      { text: 'Por favor, analise simultaneamente estes dois gráficos do mesmo ativo: o primeiro é de 5 minutos (M5) e o segundo é de 15 minutos (M15). Produza uma comparação side-by-side integrando as duas perspectivas.' }
-    ];
+    const promptText =
+      'Por favor, analise simultaneamente estes dois gráficos do mesmo ativo: o primeiro é de 5 minutos (M5) e o segundo é de 15 minutos (M15). Produza uma comparação side-by-side integrando as duas perspectivas.';
 
-    // Clean prefix for M5 base64
-    const cleanDataM5 = m5Image.replace(/^data:image\/\w+;base64,/, '');
-    contents.push({
-      inlineData: {
-        data: cleanDataM5,
-        mimeType: 'image/png'
-      }
-    });
+    const parts = buildGeminiParts(promptText, [
+      { data: m5Image, mimeType: 'image/png' },
+      { data: m15Image, mimeType: 'image/png' },
+    ]);
 
-    // Clean prefix for M15 base64
-    const cleanDataM15 = m15Image.replace(/^data:image\/\w+;base64,/, '');
-    contents.push({
-      inlineData: {
-        data: cleanDataM15,
-        mimeType: 'image/png'
-      }
-    });
-
-    const response = await aiInstance.models.generateContent({
-      model: 'gemini-1.5-flash',
-      contents: { parts: contents },
-      config: {
-        systemInstruction: MULTI_SYSTEM_INSTRUCTION,
-        responseMimeType: 'application/json',
-        responseSchema: {
-          type: Type.OBJECT,
-          properties: {
-            ativoCooptado: { type: Type.STRING, description: 'O nome ou ticker do ativo lido (ex: PETR4, WINM26, etc)' },
-            comparativoAnalise: { type: Type.STRING, description: 'Explicação minuciosa cruzando os dados do M5 e do M15. Explique a teoria da lupa (M5) e do binóculo (M15), destacando se há alinhamento ou divergência saudável de forças.' },
-            conclusaoDecisao: { type: Type.STRING, description: 'Orientação final e clara unindo as duas leituras para orientar a operação ideal.' },
-            acaoRecomendada: { type: Type.STRING, description: "'Comprar', 'Vender' ou 'Aguardar'" },
-            pontoEntrada: { type: Type.STRING, description: 'Ponto exato ideal de entrada' },
-            stopLoss: { type: Type.STRING, description: 'Stop loss sugerido protetor' },
-            alvo: { type: Type.STRING, description: 'Alvo ideal / Take profit' },
-            nivelConfianca: { type: Type.STRING, description: 'Nível de confiança técnica: Baixo, Médio ou Alto' },
-            comentarioAnalista: { type: Type.STRING, description: 'O conselho do mentor do trading sobre alinhamento de tempos gráficos.' },
-            m5: {
-              type: Type.OBJECT,
-              properties: {
-                tendencia: { type: Type.STRING, description: 'Tendência principal no M5: Alta, Baixa ou Lateral' },
-                momento: { type: Type.STRING, description: 'Momento no M5 (ex: corrigindo, exaurido, rompendo)' },
-                leituraCandles: { type: Type.STRING, description: 'Explicação lúdica das velinhas do M5 para iniciantes' },
-                suporte: { type: Type.STRING, description: 'O suporte/chão chave de M5' },
-                resistencia: { type: Type.STRING, description: 'A resistência/teto chave de M5' }
-              },
-              required: ['tendencia', 'momento', 'leituraCandles', 'suporte', 'resistencia']
-            },
-            m15: {
-              type: Type.OBJECT,
-              properties: {
-                tendencia: { type: Type.STRING, description: 'Tendência principal no M15: Alta, Baixa ou Lateral' },
-                momento: { type: Type.STRING, description: 'Momento no M15' },
-                leituraCandles: { type: Type.STRING, description: 'Explicação lúdica das velinhas do M15' },
-                suporte: { type: Type.STRING, description: 'O suporte/chão de M15' },
-                resistencia: { type: Type.STRING, description: 'A resistência/teto de M15' }
-              },
-              required: ['tendencia', 'momento', 'leituraCandles', 'suporte', 'resistencia']
-            }
-          },
-          required: [
-            'ativoCooptado', 'comparativoAnalise', 'conclusaoDecisao', 'acaoRecomendada',
-            'pontoEntrada', 'stopLoss', 'alvo', 'nivelConfianca', 'comentarioAnalista',
-            'm5', 'm15'
-          ]
-        }
-      }
-    });
-
-    const textOutput = response.text;
+    const textOutput = await generateGeminiJson(
+      aiInstance,
+      MULTI_SYSTEM_INSTRUCTION,
+      parts,
+      MULTI_ANALYSIS_SCHEMA
+    );
     if (!textOutput) {
       throw new Error('O modelo Gemini de inteligência artificial retornou uma resposta vazia na análise multi-tempo.');
     }

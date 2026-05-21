@@ -357,6 +357,18 @@ export default function App() {
     setUploadedPhotos(prev => prev.filter(p => p.id !== id));
   };
 
+  const parseApiErrorResponse = async (res: Response) => {
+    const rawText = await res.text();
+    if (!rawText.trim()) {
+      return { error: `Erro do servidor (${res.status}) sem detalhes.` };
+    }
+    try {
+      return JSON.parse(rawText) as { error?: string; code?: string; raw?: string };
+    } catch {
+      return { error: rawText.slice(0, 500) };
+    }
+  };
+
   const requestChartAnalysis = async (
     evolutionOnlyPhotos: { name: string; type: string; base64: string }[] | null
   ) => {
@@ -378,10 +390,7 @@ export default function App() {
     });
 
     if (!res.ok) {
-      const errJson = await res.json().catch(() => ({})) as {
-        error?: string;
-        code?: string;
-      };
+      const errJson = await parseApiErrorResponse(res);
       if (errJson.code === "MISSING_API_KEY" || res.status === 400) {
         openSettingsTab();
       }
@@ -395,8 +404,11 @@ export default function App() {
           : res.status === 401 || res.status === 403
           ? "Chave API inválida ou sem permissão. Gere uma nova chave no Google AI Studio."
           : "Verifique a chave em Configurações ou GEMINI_API_KEY na Vercel.";
+      const detail = errJson.error || errJson.raw;
       throw new Error(
-        errJson.error || `Erro do servidor (${res.status}). ${statusHint}`
+        detail
+          ? `${detail} (${res.status}) — ${statusHint}`
+          : `Erro do servidor (${res.status}). ${statusHint}`
       );
     }
 
@@ -427,12 +439,13 @@ export default function App() {
 
     try {
       await requestChartAnalysis(null);
-    } catch (err: any) {
+    } catch (err: unknown) {
       console.error(err);
-      setAnalysisError(
-        err.message ||
-          "Ocorreu um erro ao processar. Configure sua chave do Gemini na aba Configurações."
-      );
+      const message =
+        err instanceof Error
+          ? err.message
+          : "Ocorreu um erro ao processar. Configure sua chave do Gemini na aba Configurações.";
+      setAnalysisError(message);
     } finally {
       setIsAnalyzing(false);
     }
@@ -456,9 +469,11 @@ export default function App() {
 
     try {
       await requestChartAnalysis(newPhotos);
-    } catch (err: any) {
+    } catch (err: unknown) {
       console.error(err);
-      setAnalysisError(err.message || "Erro ao atualizar o trade com o novo print.");
+      setAnalysisError(
+        err instanceof Error ? err.message : "Erro ao atualizar o trade com o novo print."
+      );
     } finally {
       setIsAnalyzing(false);
     }
