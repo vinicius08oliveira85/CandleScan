@@ -38,18 +38,94 @@ def ensure_mt5() -> None:
         )
 
 
+def _candidate_terminal_paths() -> list[str]:
+    """Caminhos comuns do terminal64 (MetaTrader / Toro / XP / Clear)."""
+    candidates: list[str] = []
+
+    env_path = (os.environ.get("MT5_PATH") or "").strip().strip('"')
+    if env_path:
+        candidates.append(env_path)
+
+    program_dirs = [
+        os.environ.get("ProgramFiles", r"C:\Program Files"),
+        os.environ.get("ProgramFiles(x86)", r"C:\Program Files (x86)"),
+        os.path.join(os.environ.get("LOCALAPPDATA", ""), "Programs"),
+    ]
+
+    folder_names = (
+        "MetaTrader 5",
+        "MetaTrader5",
+        "Toro",
+        "Toro Investimentos",
+        "Toro Invest",
+        "XP Investimentos",
+        "Clear Investimentos",
+        "Rico",
+    )
+
+    for base in program_dirs:
+        if not base or not os.path.isdir(base):
+            continue
+        for folder in folder_names:
+            candidates.append(os.path.join(base, folder, "terminal64.exe"))
+        try:
+            for entry in os.scandir(base):
+                if not entry.is_dir():
+                    continue
+                name = entry.name.lower()
+                if "metatrader" in name or "toro" in name or "xp " in name or name == "clear":
+                    candidates.append(os.path.join(entry.path, "terminal64.exe"))
+        except OSError:
+            pass
+
+    appdata = os.path.join(os.environ.get("APPDATA", ""), "MetaQuotes", "Terminal")
+    if os.path.isdir(appdata):
+        try:
+            for entry in os.scandir(appdata):
+                if entry.is_dir():
+                    candidates.append(os.path.join(entry.path, "terminal64.exe"))
+        except OSError:
+            pass
+
+    seen: set[str] = set()
+    unique: list[str] = []
+    for p in candidates:
+        norm = os.path.normpath(p)
+        if norm not in seen and os.path.isfile(norm):
+            seen.add(norm)
+            unique.append(norm)
+    return unique
+
+
 def initialize() -> bool:
     global _initialized, _last_error
     ensure_mt5()
     if _initialized:
         return True
-    if not mt5.initialize():
-        err = mt5.last_error()
-        _set_error(f"Falha ao iniciar MT5: {err}")
-        return False
-    _initialized = True
-    _last_error = None
-    return True
+
+    if mt5.initialize():
+        _initialized = True
+        _last_error = None
+        return True
+
+    first_err = mt5.last_error()
+    for terminal_path in _candidate_terminal_paths():
+        if mt5.initialize(path=terminal_path):
+            _initialized = True
+            _last_error = None
+            return True
+
+    paths_hint = _candidate_terminal_paths()
+    hint = (
+        f" Defina MT5_PATH com o caminho do terminal64.exe (ex.: Toro)."
+        if not paths_hint
+        else f" Tentados: {', '.join(paths_hint[:3])}..."
+    )
+    _set_error(
+        f"Falha ao iniciar MT5: {first_err}.{hint} "
+        "Abra o MetaTrader 5 (Toro), faca login e deixe o programa aberto."
+    )
+    return False
 
 
 def shutdown() -> None:

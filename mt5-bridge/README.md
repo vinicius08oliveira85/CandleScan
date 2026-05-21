@@ -17,7 +17,14 @@ python -m venv .venv
 pip install -r requirements.txt
 ```
 
-Deixe o **terminal MT5 aberto** antes de iniciar a ponte.
+Deixe o **terminal MT5 aberto e logado** (conta Toro demo ou real) antes de iniciar a ponte.
+
+### Toro Investimentos
+
+1. Abra o **MetaTrader 5 da Toro** e confirme que esta logado (canto inferior direito verde).
+2. Rode `npm run dev:mt5` **com o MT5 ja aberto**.
+3. Se aparecer `MetaTrader 5 x64 not found`, no MT5: **Arquivo > Abrir pasta de dados** e localize o `terminal64.exe` no Explorer. Copie o caminho para `MT5_PATH` no arquivo `.env` da pasta `mt5-bridge`.
+4. Simbolos B3 na Toro costumam ser `PETR4`, `#PETR4` ou com sufixo da corretora — use **Testar conexao** no app ou `/symbols/search?q=PETR`.
 
 ## Executar
 
