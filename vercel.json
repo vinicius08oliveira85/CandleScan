@@ -3,10 +3,19 @@
   "buildCommand": "npm run vercel-build",
   "outputDirectory": "dist",
   "functions": {
-    "api/**/*.js": {
+    "api/analyze.js": {
       "maxDuration": 60,
       "memory": 1024,
       "includeFiles": "dist/server.cjs"
+    },
+    "api/analyze-multi.js": {
+      "maxDuration": 60,
+      "memory": 1024,
+      "includeFiles": "dist/server.cjs"
+    },
+    "api/health.js": {
+      "maxDuration": 10,
+      "memory": 256
     }
   }
 }

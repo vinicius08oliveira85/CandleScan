@@ -386,7 +386,9 @@ export default function App() {
         openSettingsTab();
       }
       const statusHint =
-        errJson.code === "MISSING_API_KEY"
+        errJson.code === "BOOT_ERROR"
+          ? "O backend não iniciou na Vercel. Aguarde o redeploy ou veja os Function Logs no painel."
+          : errJson.code === "MISSING_API_KEY"
           ? "Cole sua chave em Configurações e clique em Salvar Chave API."
           : res.status === 405
           ? "A rota /api/analyze não está ativa no servidor (deploy). Confira o backend na Vercel."
@@ -1673,8 +1675,14 @@ CandleScan FÁCIL • Análise didática com IA — use sempre stop loss.
 
             {serverHasGeminiKey === true && !getResolvedApiKey() && (
               <p className="text-[11px] text-emerald-400/90 bg-emerald-500/10 border border-emerald-500/30 rounded-lg px-3 py-2">
-                O servidor (Vercel) já tem GEMINI_API_KEY. Você pode analisar sem preencher aqui — ou
-                cole sua chave pessoal para usar a sua cota.
+                O servidor (Vercel) detectou GEMINI_API_KEY no ambiente
+                {serverVercelEnv ? ` ${serverVercelEnv}` : ""}. Você pode analisar sem preencher aqui.
+              </p>
+            )}
+            {getResolvedApiKey() && serverHasGeminiKey === false && (
+              <p className="text-[11px] text-sky-300/90 bg-sky-500/10 border border-sky-500/30 rounded-lg px-3 py-2">
+                Chave salva neste navegador — será enviada ao traduzir o gráfico (funciona mesmo sem
+                variável na Vercel).
               </p>
             )}
             {serverHasGeminiKey === false && !getResolvedApiKey() && (

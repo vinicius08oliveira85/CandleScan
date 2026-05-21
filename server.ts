@@ -3,7 +3,11 @@ import path from 'path';
 import { GoogleGenAI, Type } from '@google/genai';
 import dotenv from 'dotenv';
 
-dotenv.config({ path: '.env.local' });
+try {
+  dotenv.config({ path: '.env.local' });
+} catch {
+  /* ambiente serverless */
+}
 // dotenv.config(); // Removido para evitar reconfiguração desnecessária, .env.local já tem precedência.
 
 const app = express();
@@ -120,16 +124,19 @@ EVOLUÇÃO DE PRINTS (múltiplas imagens em ordem):
 
 ATENÇÃO: Nunca invente dados que não estejam claramente visíveis na tela do gráfico. Use uma comunicação calorosa, empática, parecendo um professor paciente ensinando uma pessoa querida do zero.`;
 
-app.get('/api/health', (_req, res) => {
+const healthHandler = (_req: express.Request, res: express.Response) => {
   res.json({
     ok: true,
     geminiConfigured: !!resolveGeminiApiKey(),
     vercelEnv: process.env.VERCEL_ENV || 'local',
   });
-});
+};
+
+app.get('/api/health', healthHandler);
+app.get('/health', healthHandler);
 
 // API Endpoint to analyze screenshots of charts
-app.post('/api/analyze', async (req, res) => {
+const analyzeHandler = async (req: express.Request, res: express.Response) => {
   try {
     const { images, dadosCompra, apiKey } = req.body;
     if (!images || !Array.isArray(images) || images.length === 0) {
@@ -250,7 +257,10 @@ app.post('/api/analyze', async (req, res) => {
       error: err.message || 'Ocorreu um erro interno na análise do gráfico.',
     });
   }
-});
+};
+
+app.post('/api/analyze', analyzeHandler);
+app.post('/analyze', analyzeHandler);
 
 const MULTI_SYSTEM_INSTRUCTION = `Você é um analista profissional de trading amigável e focado em EXPLICAR DE FORMA SIMPLES para iniciantes e leigos.
 Sua função é analisar dois prints de gráficos simultaneamente: um gráfico de 5 minutos (M5) e um de 15 minutos (M15) do MESMO ativo financeiro.

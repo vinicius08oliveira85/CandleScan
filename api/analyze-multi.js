@@ -1,3 +1,1 @@
-const { createForwarder } = require("./_forward");
-
-module.exports = createForwarder("/api/analyze-multi");
+module.exports = require("./analyze");
