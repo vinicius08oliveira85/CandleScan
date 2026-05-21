@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import os
+import subprocess
 import time
 from datetime import datetime, timezone
 from typing import Any
@@ -38,9 +39,36 @@ def ensure_mt5() -> None:
         )
 
 
+def _running_terminal64_path() -> str | None:
+    """Se o MT5 ja estiver aberto, usa o caminho do processo em execucao."""
+    if os.name != "nt":
+        return None
+    try:
+        ps_cmd = (
+            "(Get-Process -ErrorAction SilentlyContinue | "
+            "Where-Object { $_.Path -and $_.Path -like '*terminal64.exe' }) | "
+            "Select-Object -First 1 -ExpandProperty Path"
+        )
+        out = subprocess.check_output(
+            ["powershell", "-NoProfile", "-Command", ps_cmd],
+            text=True,
+            timeout=15,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        ).strip()
+        if out and os.path.isfile(out):
+            return os.path.normpath(out)
+    except Exception:
+        pass
+    return None
+
+
 def _candidate_terminal_paths() -> list[str]:
     """Caminhos comuns do terminal64 (MetaTrader / Toro / XP / Clear)."""
     candidates: list[str] = []
+
+    running = _running_terminal64_path()
+    if running:
+        candidates.append(running)
 
     env_path = (os.environ.get("MT5_PATH") or "").strip().strip('"')
     if env_path:
@@ -103,17 +131,21 @@ def initialize() -> bool:
     if _initialized:
         return True
 
-    if mt5.initialize():
-        _initialized = True
-        _last_error = None
-        return True
-
-    first_err = mt5.last_error()
+    first_err = None
     for terminal_path in _candidate_terminal_paths():
         if mt5.initialize(path=terminal_path):
             _initialized = True
             _last_error = None
             return True
+        first_err = mt5.last_error()
+
+    if mt5.initialize():
+        _initialized = True
+        _last_error = None
+        return True
+
+    if first_err is None:
+        first_err = mt5.last_error()
 
     paths_hint = _candidate_terminal_paths()
     hint = (
@@ -135,13 +167,31 @@ def shutdown() -> None:
     _initialized = False
 
 
+def get_diagnose() -> dict[str, Any]:
+    ensure_mt5()
+    running = _running_terminal64_path()
+    candidates = _candidate_terminal_paths()
+    return {
+        "mt5PackageInstalled": mt5 is not None,
+        "mt5ProcessPath": running,
+        "mt5PathEnv": (os.environ.get("MT5_PATH") or "").strip() or None,
+        "candidatePaths": candidates[:12],
+        "hint": (
+            "Abra o MT5 da Toro antes de testar. Rode: npm run find:mt5 "
+            "na pasta do projeto para gravar MT5_PATH automaticamente."
+        ),
+    }
+
+
 def get_health() -> dict[str, Any]:
     ensure_mt5()
     if not initialize():
+        diag = get_diagnose()
         return {
             "ok": False,
             "mt5Connected": False,
             "error": _last_error or "MT5 não conectado",
+            "diagnose": diag,
         }
     info = mt5.terminal_info()
     account = mt5.account_info()

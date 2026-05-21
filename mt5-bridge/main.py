@@ -47,6 +47,12 @@ def health(x_bridge_key: str | None = Header(default=None, alias="X-Bridge-Key")
     return svc.get_health()
 
 
+@app.get("/diagnose")
+def diagnose(x_bridge_key: str | None = Header(default=None, alias="X-Bridge-Key")):
+    _check_auth(x_bridge_key)
+    return svc.get_diagnose()
+
+
 @app.get("/symbols/search")
 def symbols_search(
     q: str = Query("", min_length=0),

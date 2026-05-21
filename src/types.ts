@@ -8,6 +8,14 @@ export interface SyntheticCandle {
   tick_volume?: number;
 }
 
+export interface Mt5DiagnoseResponse {
+  mt5PackageInstalled?: boolean;
+  mt5ProcessPath?: string | null;
+  mt5PathEnv?: string | null;
+  candidatePaths?: string[];
+  hint?: string;
+}
+
 export interface Mt5HealthResponse {
   ok: boolean;
   mt5Connected?: boolean;
@@ -17,6 +25,7 @@ export interface Mt5HealthResponse {
   server?: string;
   error?: string;
   serverTime?: string;
+  diagnose?: Mt5DiagnoseResponse;
 }
 
 export interface Mt5CandlesResponse {

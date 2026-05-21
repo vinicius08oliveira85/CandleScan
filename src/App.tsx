@@ -66,6 +66,7 @@ import {
   getBridgeApiKey,
   setBridgeApiKey,
   fetchMt5Health,
+  fetchMt5Diagnose,
   fetchMt5Candles,
   fetchMt5Tick,
   pollIntervalMs,
@@ -307,8 +308,19 @@ export default function App() {
     try {
       const health = await fetchMt5Health();
       if (!health.ok || !health.mt5Connected) {
+        let msg = health.error || "MT5 não conectado.";
+        const d = health.diagnose;
+        if (d?.mt5ProcessPath) {
+          msg += ` Processo detectado: ${d.mt5ProcessPath}. Reinicie: npm run dev:mt5`;
+        } else {
+          msg +=
+            " Abra o MT5 da Toro (logado), depois no terminal do projeto rode: npm run find:mt5";
+        }
+        if (d?.candidatePaths?.length) {
+          msg += ` Caminhos: ${d.candidatePaths.slice(0, 2).join(" | ")}`;
+        }
         setMt5Status("error");
-        setMt5StatusMessage(health.error || "MT5 não conectado — abra o terminal e faça login.");
+        setMt5StatusMessage(msg);
         return;
       }
       const data = await fetchMt5Candles(mt5Symbol, mt5Timeframe, 3);
@@ -2335,6 +2347,16 @@ CandleScan FÁCIL • Análise didática com IA — use sempre stop loss.
                 Salvar ponte MT5
               </button>
             </div>
+
+            {mt5Status === "error" && (
+              <div className="text-[11px] text-amber-200/90 bg-amber-950/40 border border-amber-500/30 rounded-lg px-3 py-2 space-y-1 leading-relaxed">
+                <p className="font-bold text-amber-300">Checklist Toro</p>
+                <p>1. MetaTrader 5 da Toro aberto e logado (icone verde).</p>
+                <p>2. No terminal do projeto: <code className="text-cyan-300">npm run find:mt5</code></p>
+                <p>3. Depois: <code className="text-cyan-300">npm run dev:mt5</code> (com MT5 aberto)</p>
+                <p>4. Testar conexao de novo nesta tela.</p>
+              </div>
+            )}
 
             <p className="text-[10px] text-zinc-500 leading-relaxed">
               Guia VPS/túnel: <code className="text-zinc-400">mt5-bridge/README.md</code>. Site na Vercel

@@ -1,4 +1,10 @@
-import type { Mt5CandlesResponse, Mt5HealthResponse, Mt5TickResponse, SyntheticCandle } from "./types";
+import type {
+  Mt5CandlesResponse,
+  Mt5DiagnoseResponse,
+  Mt5HealthResponse,
+  Mt5TickResponse,
+  SyntheticCandle,
+} from "./types";
 
 const STORAGE_BRIDGE_URL = "candlescan_mt5_bridge_url";
 const STORAGE_BRIDGE_KEY = "candlescan_mt5_bridge_key";
@@ -53,6 +59,10 @@ async function bridgeFetch<T>(path: string): Promise<T> {
 
 export async function fetchMt5Health(): Promise<Mt5HealthResponse> {
   return bridgeFetch<Mt5HealthResponse>("/health");
+}
+
+export async function fetchMt5Diagnose(): Promise<Mt5DiagnoseResponse> {
+  return bridgeFetch<Mt5DiagnoseResponse>("/diagnose");
 }
 
 export async function fetchMt5Candles(
