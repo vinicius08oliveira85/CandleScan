@@ -11,14 +11,14 @@ module.exports = (req, res) => {
       ok: true,
       geminiConfigured: !!envKey,
       vercelEnv: process.env.VERCEL_ENV || "unknown",
-      runtime: "standalone",
+      runtime: "standalone-cjs",
     });
   } catch (err) {
     return res.status(200).json({
       ok: true,
       geminiConfigured: false,
       vercelEnv: "unknown",
-      runtime: "standalone",
+      runtime: "standalone-cjs",
       warning: err.message,
     });
   }

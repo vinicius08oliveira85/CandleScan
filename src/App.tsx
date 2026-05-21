@@ -1515,32 +1515,6 @@ CandleScan FÁCIL • Análise didática com IA — use sempre stop loss.
             )}
 
             <button
-              onClick={() => setActiveTab(activeTab === "school" ? "scanner" : "school")}
-              className={`px-3.5 py-1.5 flex items-center gap-1.5 rounded-lg text-xs font-semibold active:scale-95 transition-all text-center border cursor-pointer ${
-                activeTab === "school" 
-                  ? "bg-amber-500/20 border-amber-400 text-amber-300"
-                  : "bg-[#18181b] border-[#27272a] text-[#a1a1aa] hover:border-amber-500/50 hover:text-white"
-              }`}
-            >
-              <BookOpen className="h-3.5 w-3.5" />
-              {activeTab === "school" ? "Ir para o Scanner" : "📚 Guia do Iniciante"}
-            </button>
-
-            <button
-              type="button"
-              onClick={openSettingsTab}
-              className={`px-3.5 py-1.5 flex items-center gap-1.5 rounded-lg text-xs font-semibold active:scale-95 transition-all text-center border cursor-pointer ${
-                activeTab === "settings"
-                  ? "bg-zinc-700/50 border-zinc-500 text-white"
-                  : "bg-[#18181b] border-[#27272a] text-[#a1a1aa] hover:border-zinc-500 hover:text-white"
-              }`}
-              title="Chave API Gemini"
-            >
-              <KeyRound className="h-3.5 w-3.5" />
-              Configurações
-            </button>
-            
-            <button
               id="reset-btn"
               onClick={handleResetWorkspace}
               className="px-3.5 py-1.5 flex items-center gap-1.5 rounded-lg bg-[#18181b] border border-[#27272a] text-xs font-semibold text-[#fafafa] hover:bg-[#27272a] hover:border-zinc-600 active:scale-95 transition-all text-center cursor-pointer"
@@ -1732,28 +1706,6 @@ CandleScan FÁCIL • Análise didática com IA — use sempre stop loss.
           </div>
         </div>
       )}
-
-        {/* TAB 1: SCANNER CORE (TOP BANNER) */}
-        {activeTab === "scanner" && (
-          <div id="welcome-message" className="bg-gradient-to-r from-rose-950/20 via-zinc-900 to-zinc-900 border border-[#27272a] rounded-2xl p-5 flex flex-col md:flex-row items-start md:items-center justify-between gap-4 shadow-sm relative overflow-hidden">
-            <div className="absolute right-0 top-0 w-80 h-32 bg-rose-500/5 blur-3xl rounded-full pointer-events-none"></div>
-            
-            <div className="space-y-1 z-10 w-full">
-              <div className="flex items-center gap-2">
-                <span className="bg-amber-500/10 text-amber-400 text-[10px] uppercase font-bold tracking-widest px-2.5 py-0.5 rounded border border-amber-500/20">
-                  Aprenda Grátis
-                </span>
-                <span className="text-xs text-[#a1a1aa]">• Análise de Gráficos Descomplicada</span>
-              </div>
-              <h2 className="text-lg font-bold text-white">
-                Sua Inteligência de Velas (Candlesticks) Amigável para Leigos
-              </h2>
-              <p className="text-sm text-[#a1a1aa] leading-relaxed">
-                Não sabe nada sobre gráficos financeiros? Sem problemas! Esqueça termos complicados. Basta tirar um print do gráfico do seu celular ou computador, carregar aqui, e nossa Inteligência Artificial vai traduzir o desenho das barras em conselhos práticos e simples de entender.
-              </p>
-            </div>
-          </div>
-        )}
 
         {/* TAB 2: INTERACTIVE CANDLE SIMULATOR */}
         {activeTab === "simulator" && (
@@ -2643,7 +2595,7 @@ CandleScan FÁCIL • Análise didática com IA — use sempre stop loss.
         )}
 
         {/* METADATA SPECIFIC SECTION: THE BENTO GRID */}
-        <section id="results-bento-grid" className="bento-container grid grid-cols-1 md:grid-cols-12 gap-4">
+        <section id="results-bento-grid" className="bento-container grid grid-cols-1 md:grid-cols-12 gap-4 md:gap-5 max-w-6xl mx-auto w-full">
           
           {/* Contextual Success Alert Banner */}
           {showSuccessToast && (
@@ -2670,7 +2622,7 @@ CandleScan FÁCIL • Análise didática com IA — use sempre stop loss.
             initial={{ opacity: 0, y: 12 }}
             animate={{ opacity: 1, y: 0 }}
             transition={{ type: "spring", stiffness: 200, damping: 22 }}
-            className={`md:col-span-12 rounded-xl border-2 overflow-hidden bg-[#131722] ${actionCfg.glow} ${actionCfg.bg}`}
+            className={`md:col-span-12 max-w-6xl mx-auto w-full rounded-xl border-2 overflow-hidden bg-[#131722] ${actionCfg.glow} ${actionCfg.bg}`}
           >
             <div className="px-5 py-4 border-b border-[#363a45] bg-[#1e222d]/80 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
               <div className="flex items-center gap-3 flex-wrap">
@@ -2761,18 +2713,18 @@ CandleScan FÁCIL • Análise didática com IA — use sempre stop loss.
               </div>
             )}
 
-            <div className="p-4 md:p-5 grid grid-cols-1 md:grid-cols-3 gap-3 md:gap-4">
+            <div className="p-4 md:p-6 grid grid-cols-1 md:grid-cols-3 gap-4 md:gap-5 max-w-5xl mx-auto w-full">
               {/* Entrada */}
-              <div className="rounded-xl border-2 border-amber-500/50 bg-[#0d1017] p-4 flex flex-col gap-3 shadow-[0_0_24px_rgba(245,158,11,0.15)] hover:border-amber-400/70 transition-colors">
-                <div className="flex items-center gap-2">
+              <div className="rounded-xl border-2 border-amber-500 bg-[#0d1017] p-5 md:p-6 flex flex-col gap-3 items-center text-center shadow-[0_0_28px_rgba(245,158,11,0.2)] hover:border-amber-400 transition-colors">
+                <div className="flex items-center justify-center gap-2">
                   <span className="p-2 rounded-lg bg-amber-500/20 text-amber-400 ring-1 ring-amber-500/40">
                     <CircleDot className="h-5 w-5 stroke-[2.5px]" />
                   </span>
-                  <span className="text-[11px] font-black uppercase tracking-wider text-amber-400 leading-tight">
+                  <span className="text-xs sm:text-sm font-black uppercase tracking-wider text-amber-400 leading-tight">
                     {ticketLabels.entryTitle}
                   </span>
                 </div>
-                <p className="text-2xl font-mono font-bold text-amber-300 tabular-nums tracking-tight drop-shadow-[0_0_12px_rgba(245,158,11,0.35)]">
+                <p className="text-3xl md:text-4xl font-mono font-bold text-amber-300 tabular-nums tracking-tight drop-shadow-[0_0_12px_rgba(245,158,11,0.35)]">
                   {formatDisplayPrice(activeAnalysis.pontoEntrada)}
                 </p>
                 {getPriceExplanation(activeAnalysis.pontoEntrada) && (
@@ -2783,16 +2735,16 @@ CandleScan FÁCIL • Análise didática com IA — use sempre stop loss.
               </div>
 
               {/* Stop */}
-              <div className="rounded-xl border-2 border-[#ef5350]/50 bg-[#0d1017] p-4 flex flex-col gap-3 shadow-[0_0_24px_rgba(239,83,80,0.15)] hover:border-[#ef5350]/70 transition-colors">
-                <div className="flex items-center gap-2">
+              <div className="rounded-xl border-2 border-[#ef5350] bg-[#0d1017] p-5 md:p-6 flex flex-col gap-3 items-center text-center shadow-[0_0_28px_rgba(239,83,80,0.2)] hover:border-[#ff6b6b] transition-colors">
+                <div className="flex items-center justify-center gap-2">
                   <span className="p-2 rounded-lg bg-[#ef5350]/20 text-[#ef5350] ring-1 ring-[#ef5350]/40">
                     <Shield className="h-5 w-5 stroke-[2.5px]" />
                   </span>
-                  <span className="text-[11px] font-black uppercase tracking-wider text-[#ef5350] leading-tight">
+                  <span className="text-xs sm:text-sm font-black uppercase tracking-wider text-[#ef5350] leading-tight">
                     {ticketLabels.stopTitle}
                   </span>
                 </div>
-                <p className="text-2xl font-mono font-bold text-[#ef5350] tabular-nums tracking-tight drop-shadow-[0_0_12px_rgba(239,83,80,0.4)]">
+                <p className="text-3xl md:text-4xl font-mono font-bold text-[#ef5350] tabular-nums tracking-tight drop-shadow-[0_0_12px_rgba(239,83,80,0.4)]">
                   {formatDisplayPrice(activeAnalysis.stopLoss)}
                 </p>
                 {getPriceExplanation(activeAnalysis.stopLoss) && (
@@ -2803,16 +2755,16 @@ CandleScan FÁCIL • Análise didática com IA — use sempre stop loss.
               </div>
 
               {/* Alvo */}
-              <div className="rounded-xl border-2 border-[#26a69a]/50 bg-[#0d1017] p-4 flex flex-col gap-3 shadow-[0_0_24px_rgba(38,166,154,0.15)] hover:border-[#26a69a]/70 transition-colors">
-                <div className="flex items-center gap-2">
+              <div className="rounded-xl border-2 border-[#26a69a] bg-[#0d1017] p-5 md:p-6 flex flex-col gap-3 items-center text-center shadow-[0_0_28px_rgba(38,166,154,0.2)] hover:border-[#2dd4bf] transition-colors">
+                <div className="flex items-center justify-center gap-2">
                   <span className="p-2 rounded-lg bg-[#26a69a]/20 text-[#26a69a] ring-1 ring-[#26a69a]/40">
                     <Trophy className="h-5 w-5 stroke-[2.5px]" />
                   </span>
-                  <span className="text-[11px] font-black uppercase tracking-wider text-[#26a69a] leading-tight">
+                  <span className="text-xs sm:text-sm font-black uppercase tracking-wider text-[#26a69a] leading-tight">
                     {ticketLabels.targetTitle}
                   </span>
                 </div>
-                <p className="text-2xl font-mono font-bold text-[#26a69a] tabular-nums tracking-tight drop-shadow-[0_0_12px_rgba(38,166,154,0.4)]">
+                <p className="text-3xl md:text-4xl font-mono font-bold text-[#26a69a] tabular-nums tracking-tight drop-shadow-[0_0_12px_rgba(38,166,154,0.4)]">
                   {formatDisplayPrice(activeAnalysis.alvo)}
                 </p>
                 {getPriceExplanation(activeAnalysis.alvo) && (
@@ -2835,8 +2787,8 @@ CandleScan FÁCIL • Análise didática com IA — use sempre stop loss.
             </div>
           </motion.div>
           
-          {/* Gráfico técnico — topo (logo após o ticket) */}
-          <div className="card md:col-span-12 p-5 bg-[#131722] border border-[#363a45] rounded-xl flex flex-col justify-between focus-within:ring-1 focus-within:ring-rose-500 transition-all">
+          {/* Gráfico técnico — protagonista (logo após o ticket) */}
+          <div className="card md:col-span-12 p-5 md:p-6 bg-[#131722] border-2 border-[#363a45] rounded-xl flex flex-col justify-between focus-within:ring-1 focus-within:ring-rose-500 transition-all max-w-6xl mx-auto w-full">
             
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 mb-3">
               <div>
@@ -2878,7 +2830,7 @@ CandleScan FÁCIL • Análise didática com IA — use sempre stop loss.
             </div>
 
             {/* Candle illustration representing selected preset style graph */}
-            <div className="mt-2 text-xs text-zinc-500 space-y-2.5">
+            <div className="mt-2 text-xs text-zinc-500 space-y-3 max-w-5xl mx-auto w-full">
               <div className="flex items-center justify-between">
                 <span className="font-bold text-[#fafafa] tracking-wide flex items-center gap-1.5">
                   <Sliders className="h-3 w-3 text-rose-500" />
@@ -2888,7 +2840,7 @@ CandleScan FÁCIL • Análise didática com IA — use sempre stop loss.
               </div>
               
               {/* Dynamic visual graph mock */}
-              <div id="price-levels-guide-graph" className="h-40 sm:h-44 bg-[#0B0E14] border border-[#363a45] rounded-lg p-3 relative overflow-hidden group/graph select-none shadow-inner shadow-black/40">
+              <div id="price-levels-guide-graph" className="h-72 sm:h-96 bg-[#0B0E14] border-2 border-[#363a45] rounded-lg p-4 md:p-5 relative overflow-hidden group/graph select-none shadow-inner shadow-black/40">
                 <div className="absolute top-2 right-2 flex items-center gap-1.5 select-none z-20">
                   <div className="flex items-center gap-1 text-[9px] bg-emerald-950/60 border border-emerald-500/20 px-1.5 py-0.5 rounded-md text-emerald-400 font-bold">
                     <span className="inline-block w-1.5 h-1.5 rounded-full bg-emerald-400 shadow-[0_0_8px_rgba(52,211,153,0.9)] animate-pulse"></span>
