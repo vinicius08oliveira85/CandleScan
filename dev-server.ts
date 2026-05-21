@@ -64,7 +64,9 @@ app.post('/api/analyze', async (req, res) => {
       promptText += `Você recebeu ${images.length} prints em ORDEM CRONOLÓGICA. O último é o momento ATUAL.`;
     }
     if (dadosCompra?.precoEntrada && dadosCompra?.quantidade) {
-      promptText += ` MODO GERENTE DE TRADE: comprou a ${dadosCompra.precoEntrada}, quantidade ${dadosCompra.quantidade}.`;
+      const op =
+        dadosCompra.tipoOperacao === 'venda' ? 'vendeu' : 'comprou';
+      promptText += ` MODO GERENTE DE TRADE: ${op} a ${dadosCompra.precoEntrada}, quantidade ${dadosCompra.quantidade}. Manter esse preço de entrada nas janelas seguintes.`;
     }
 
     const parts = buildGeminiParts(promptText, images);

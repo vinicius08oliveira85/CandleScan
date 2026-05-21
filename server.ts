@@ -139,7 +139,9 @@ const analyzeHandler = async (req: express.Request, res: express.Response) => {
       promptText += `Você recebeu ${images.length} prints do MESMO ativo em ORDEM CRONOLÓGICA (do mais antigo ao mais recente). O ÚLTIMO print é o momento ATUAL do mercado. Compare a evolução do preço entre eles antes de recomendar.`;
     }
     if (dadosCompra?.precoEntrada && dadosCompra?.quantidade) {
-      promptText += ` MODO GERENTE DE TRADE ATIVO: o investidor comprou a ${dadosCompra.precoEntrada} com quantidade ${dadosCompra.quantidade}. Compare o gráfico atual com esse preço pago, preencha statusTrade e use o formato obrigatório no comentarioAnalista.`;
+      const op =
+        dadosCompra.tipoOperacao === 'venda' ? 'vendeu (posição vendida)' : 'comprou (posição comprada)';
+      promptText += ` MODO GERENTE DE TRADE ATIVO: o investidor ${op} a ${dadosCompra.precoEntrada} com quantidade ${dadosCompra.quantidade}. Esse preço de entrada deve ser mantido como referência da operação original, mesmo com prints novos. Compare o gráfico atual com esse preço, preencha statusTrade e use o formato obrigatório no comentarioAnalista.`;
     }
 
     const parts = buildGeminiParts(promptText, images);

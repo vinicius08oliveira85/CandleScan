@@ -1,7 +1,19 @@
-import { SavedAnalysis, SavedAnalysisImage, EvolutionSnapshot, DadosCompra } from "./types";
+import {
+  SavedAnalysis,
+  SavedAnalysisImage,
+  EvolutionSnapshot,
+  DadosCompra,
+  TipoOperacao,
+} from "./types";
 
 export const HISTORY_STORAGE_KEY = "candlescan_history_v1";
 export const MAX_HISTORY_WITH_PHOTOS = 15;
+
+export type SnapshotInvestment = {
+  dadosCompra?: DadosCompra;
+  valorInvestidoTotal?: number;
+  tipoOperacao?: TipoOperacao;
+};
 
 export function photosToSavedImages(
   photos: { name: string; type: string; base64: string }[]
@@ -23,6 +35,9 @@ export function normalizeHistoryRecord(record: SavedAnalysis): SavedAnalysis {
           capturedAt: record.timestamp,
           label: "Print inicial",
           images,
+          dadosCompra: record.dadosCompra,
+          valorInvestidoTotal: record.valorInvestidoTotal,
+          tipoOperacao: record.tipoOperacao ?? record.dadosCompra?.tipoOperacao,
         },
       ],
     };
@@ -86,13 +101,41 @@ export function persistHistoryToStorage(records: SavedAnalysis[]): SavedAnalysis
 
 export function buildEvolutionSnapshot(
   photos: { name: string; type: string; base64: string }[],
-  label: string
+  label: string,
+  investment?: SnapshotInvestment
 ): EvolutionSnapshot {
+  const dadosCompra = investment?.dadosCompra
+    ? {
+        ...investment.dadosCompra,
+        tipoOperacao:
+          investment.tipoOperacao ??
+          investment.dadosCompra.tipoOperacao ??
+          "compra",
+      }
+    : undefined;
+
   return {
     capturedAt: new Date().toISOString(),
     label,
     images: photosToSavedImages(photos),
+    dadosCompra,
+    valorInvestidoTotal: investment?.valorInvestidoTotal,
+    tipoOperacao: investment?.tipoOperacao ?? dadosCompra?.tipoOperacao ?? "compra",
   };
+}
+
+/** Índice da janela (snapshot) para cada foto na ordem cronológica de previewImages */
+export function getSnapshotIndexForPhoto(
+  photoIndex: number,
+  snapshots: EvolutionSnapshot[]
+): number {
+  let offset = 0;
+  for (let i = 0; i < snapshots.length; i++) {
+    const count = snapshots[i].images?.length ?? 0;
+    if (photoIndex < offset + count) return i;
+    offset += count;
+  }
+  return Math.max(0, snapshots.length - 1);
 }
 
 export function mergeHistoryAnalysis(
@@ -101,19 +144,44 @@ export function mergeHistoryAnalysis(
   allPhotos: { name: string; type: string; base64: string }[],
   dadosCompra: DadosCompra | undefined,
   valorInvestidoTotal: number | undefined,
+  tipoOperacao: TipoOperacao | undefined,
   newSnapshotPhotos: { name: string; type: string; base64: string }[] | null
 ): SavedAnalysis {
   const savedAll = photosToSavedImages(allPhotos);
   const snapshots = [...(existing.evolutionSnapshots ?? [])];
 
+  const lockedDados = existing.dadosCompra ?? dadosCompra;
+  const lockedValor = existing.valorInvestidoTotal ?? valorInvestidoTotal;
+  const lockedTipo =
+    existing.tipoOperacao ??
+    existing.dadosCompra?.tipoOperacao ??
+    tipoOperacao ??
+    lockedDados?.tipoOperacao ??
+    "compra";
+
+  const lockedDadosWithTipo = lockedDados
+    ? { ...lockedDados, tipoOperacao: lockedTipo }
+    : undefined;
+
+  const investment: SnapshotInvestment | undefined = lockedDadosWithTipo
+    ? {
+        dadosCompra: lockedDadosWithTipo,
+        valorInvestidoTotal: lockedValor,
+        tipoOperacao: lockedTipo,
+      }
+    : undefined;
+
   if (newSnapshotPhotos && newSnapshotPhotos.length > 0) {
     snapshots.push(
       buildEvolutionSnapshot(
         newSnapshotPhotos,
-        `Atualização ${snapshots.length + 1}`
+        `Janela atualizada ${snapshots.length + 1}`,
+        investment
       )
     );
   }
+
+  const isEvolutionUpdate = !!(newSnapshotPhotos && newSnapshotPhotos.length > 0);
 
   return {
     ...existing,
@@ -128,8 +196,13 @@ export function mergeHistoryAnalysis(
     previewImages: savedAll,
     imageCount: savedAll.length,
     evolutionSnapshots: snapshots.length ? snapshots : existing.evolutionSnapshots,
-    dadosCompra: dadosCompra ?? existing.dadosCompra,
-    valorInvestidoTotal: valorInvestidoTotal ?? existing.valorInvestidoTotal,
-    isLiveTrade: !!dadosCompra || existing.isLiveTrade,
+    dadosCompra: isEvolutionUpdate
+      ? lockedDadosWithTipo ?? existing.dadosCompra
+      : lockedDadosWithTipo ?? dadosCompra ?? existing.dadosCompra,
+    valorInvestidoTotal: isEvolutionUpdate
+      ? lockedValor ?? existing.valorInvestidoTotal
+      : lockedValor ?? valorInvestidoTotal ?? existing.valorInvestidoTotal,
+    tipoOperacao: lockedTipo,
+    isLiveTrade: !!(lockedDadosWithTipo ?? existing.dadosCompra ?? dadosCompra),
   };
 }

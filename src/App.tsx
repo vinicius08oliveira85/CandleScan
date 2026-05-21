@@ -33,7 +33,15 @@ import {
   EyeOff,
   KeyRound
 } from "lucide-react";
-import { ChartAnalysis, MultiChartAnalysis, SavedAnalysis, PresetChart, BeforeInstallPromptEvent, DadosCompra } from "./types";
+import {
+  ChartAnalysis,
+  MultiChartAnalysis,
+  SavedAnalysis,
+  PresetChart,
+  BeforeInstallPromptEvent,
+  DadosCompra,
+  TipoOperacao,
+} from "./types";
 import { PRESET_CHARTS, PRESET_MULTI_CHARTS } from "./data/presets";
 import {
   loadHistoryFromStorage,
@@ -42,6 +50,7 @@ import {
   photosToSavedImages,
   buildEvolutionSnapshot,
   mergeHistoryAnalysis,
+  getSnapshotIndexForPhoto,
 } from "./historyStorage";
 import { motion } from "motion/react";
 
@@ -78,6 +87,7 @@ export default function App() {
   // Acompanhamento de trade vivo
   const [investedPrice, setInvestedPrice] = useState<string>("");
   const [investedAmount, setInvestedAmount] = useState<string>("");
+  const [tradeOperacao, setTradeOperacao] = useState<TipoOperacao>("compra");
   const [activeHistoryId, setActiveHistoryId] = useState<string | null>(null);
   const [baselinePhotoCount, setBaselinePhotoCount] = useState(0);
   
@@ -277,19 +287,89 @@ export default function App() {
     const precoEntrada = parseInvestedNumber(investedPrice);
     const valorTotal = parseInvestedNumber(investedAmount);
     if (precoEntrada <= 0 || valorTotal <= 0) return undefined;
-    return { precoEntrada, quantidade: valorTotal / precoEntrada };
+    return {
+      precoEntrada,
+      quantidade: valorTotal / precoEntrada,
+      tipoOperacao: tradeOperacao,
+    };
   };
 
   const getValorInvestidoTotal = () => parseInvestedNumber(investedAmount);
+
+  const getActiveHistoryRecord = () =>
+    activeHistoryId ? history.find((h) => h.id === activeHistoryId) : undefined;
+
+  const isTradeEntryLocked = () => {
+    const item = getActiveHistoryRecord();
+    return !!(activeHistoryId && item?.dadosCompra);
+  };
+
+  const getEffectiveDadosCompra = (): DadosCompra | undefined => {
+    const item = getActiveHistoryRecord();
+    if (item?.dadosCompra) {
+      return {
+        ...item.dadosCompra,
+        tipoOperacao: item.tipoOperacao ?? item.dadosCompra.tipoOperacao ?? "compra",
+      };
+    }
+    return buildDadosCompra();
+  };
+
+  const getEffectiveValorInvestido = () => {
+    const item = getActiveHistoryRecord();
+    if (item?.valorInvestidoTotal != null && item.valorInvestidoTotal > 0) {
+      return item.valorInvestidoTotal;
+    }
+    const v = getValorInvestidoTotal();
+    return v > 0 ? v : undefined;
+  };
+
+  const getEffectiveTipoOperacao = (): TipoOperacao => {
+    const item = getActiveHistoryRecord();
+    return (
+      item?.tipoOperacao ??
+      item?.dadosCompra?.tipoOperacao ??
+      tradeOperacao
+    );
+  };
+
+  const formatInvestedPriceDisplay = (preco: number) =>
+    `R$ ${preco.toFixed(2).replace(".", ",")}`;
+
+  const formatOperacaoLabel = (tipo: TipoOperacao) =>
+    tipo === "venda" ? "Vendi" : "Comprei";
+
+  const getPhotoInvestmentBadge = (photoIndex: number): string | null => {
+    const item = getActiveHistoryRecord();
+    const dados = getEffectiveDadosCompra();
+    if (!dados) return null;
+
+    const tipo = getEffectiveTipoOperacao();
+    const preco = dados.precoEntrada;
+
+    if (item?.evolutionSnapshots?.length) {
+      const snapIdx = getSnapshotIndexForPhoto(photoIndex, item.evolutionSnapshots);
+      const snap = item.evolutionSnapshots[snapIdx];
+      const snapPreco = snap?.dadosCompra?.precoEntrada ?? preco;
+      const snapTipo = snap?.tipoOperacao ?? snap?.dadosCompra?.tipoOperacao ?? tipo;
+      return `${formatOperacaoLabel(snapTipo)} ${formatInvestedPriceDisplay(snapPreco)}`;
+    }
+
+    return `${formatOperacaoLabel(tipo)} ${formatInvestedPriceDisplay(preco)}`;
+  };
 
   const persistAnalysisToHistory = (
     newAnalysis: ChartAnalysis,
     photos: { name: string; type: string; base64: string }[],
     evolutionOnlyPhotos: { name: string; type: string; base64: string }[] | null
   ) => {
-    const dadosCompra = buildDadosCompra();
-    const valorInvestidoTotal = getValorInvestidoTotal() || undefined;
+    const dadosCompra = getEffectiveDadosCompra();
+    const valorInvestidoTotal = getEffectiveValorInvestido();
+    const tipoOperacao = getEffectiveTipoOperacao();
     const savedImages = photosToSavedImages(photos);
+    const snapshotInvestment = dadosCompra
+      ? { dadosCompra, valorInvestidoTotal, tipoOperacao }
+      : undefined;
 
     if (activeHistoryId) {
       const existing = history.find((h) => h.id === activeHistoryId);
@@ -300,6 +380,7 @@ export default function App() {
         photos,
         dadosCompra,
         valorInvestidoTotal,
+        tipoOperacao,
         evolutionOnlyPhotos
       );
       const updated = persistHistoryToStorage(
@@ -307,6 +388,16 @@ export default function App() {
       );
       setHistory(updated);
       setBaselinePhotoCount(merged.previewImages?.length ?? photos.length);
+      if (merged.dadosCompra) {
+        setInvestedPrice(String(merged.dadosCompra.precoEntrada));
+        setInvestedAmount(
+          String(
+            merged.valorInvestidoTotal ??
+              merged.dadosCompra.precoEntrada * merged.dadosCompra.quantidade
+          )
+        );
+        setTradeOperacao(merged.tipoOperacao ?? merged.dadosCompra.tipoOperacao ?? "compra");
+      }
       return;
     }
 
@@ -325,9 +416,12 @@ export default function App() {
       analysis: newAnalysis,
       imageCount: photos.length,
       previewImages: savedImages,
-      evolutionSnapshots: [buildEvolutionSnapshot(photos, "Print inicial")],
+      evolutionSnapshots: [
+        buildEvolutionSnapshot(photos, "Print inicial", snapshotInvestment),
+      ],
       dadosCompra,
       valorInvestidoTotal,
+      tipoOperacao: dadosCompra ? tipoOperacao : undefined,
       isLiveTrade: !!dadosCompra,
     };
 
@@ -424,7 +518,7 @@ export default function App() {
       data: photo.base64,
       mimeType: photo.type,
     }));
-    const dadosCompra = buildDadosCompra();
+    const dadosCompra = getEffectiveDadosCompra();
 
     const trimmedKey = getResolvedApiKey();
     const res = await fetch("/api/analyze", {
@@ -529,6 +623,7 @@ export default function App() {
     setBaselinePhotoCount(0);
     setInvestedPrice("");
     setInvestedAmount("");
+    setTradeOperacao("compra");
     const defaultPreset = PRESET_CHARTS[0];
     setActiveAnalysis(defaultPreset.analysis);
     setSelectedPresetId(defaultPreset.id);
@@ -575,6 +670,13 @@ export default function App() {
         item.valorInvestidoTotal ??
         item.dadosCompra.precoEntrada * item.dadosCompra.quantidade;
       setInvestedAmount(String(total));
+      setTradeOperacao(
+        item.tipoOperacao ?? item.dadosCompra.tipoOperacao ?? "compra"
+      );
+    } else {
+      setInvestedPrice("");
+      setInvestedAmount("");
+      setTradeOperacao("compra");
     }
 
     setToastType("history");
@@ -842,11 +944,17 @@ export default function App() {
 
   const operationViability = getOperationViability();
 
-  const computeROI = (currentPrice: number, buyPrice: number, amount: number) => {
-    if (!buyPrice || !currentPrice || !amount) return null;
-    const profitPerUnit = currentPrice - buyPrice;
-    const totalProfit = profitPerUnit * amount;
-    const percentage = (profitPerUnit / buyPrice) * 100;
+  const computeROI = (
+    currentPrice: number,
+    entryPrice: number,
+    quantity: number,
+    tipo: TipoOperacao = "compra"
+  ) => {
+    if (!entryPrice || !currentPrice || !quantity) return null;
+    const profitPerUnit =
+      tipo === "venda" ? entryPrice - currentPrice : currentPrice - entryPrice;
+    const totalProfit = profitPerUnit * quantity;
+    const percentage = (profitPerUnit / entryPrice) * 100;
     return {
       totalProfit,
       percentage,
@@ -862,16 +970,87 @@ export default function App() {
     return parsePrice(activeAnalysis.pontoEntrada);
   };
 
-  const isPositioned = () => !!buildDadosCompra();
+  const isPositioned = () => !!getEffectiveDadosCompra();
 
   const liveRoi = () => {
-    const dados = buildDadosCompra();
+    const dados = getEffectiveDadosCompra();
     const current = getCurrentMarketPrice();
     if (!dados || current === null) return null;
-    return computeROI(current, dados.precoEntrada, dados.quantidade);
+    return computeROI(
+      current,
+      dados.precoEntrada,
+      dados.quantidade,
+      getEffectiveTipoOperacao()
+    );
   };
 
   const roiData = liveRoi();
+
+  const getTradeWindowAnalysis = () => {
+    const dados = getEffectiveDadosCompra();
+    const current = getCurrentMarketPrice();
+    if (!dados || current === null) return null;
+
+    const entry = dados.precoEntrada;
+    const tipo = getEffectiveTipoOperacao();
+    const isVenda = tipo === "venda";
+    const diff = current - entry;
+    const diffPct = (diff / entry) * 100;
+    const favorable = isVenda ? diff < 0 : diff > 0;
+
+    const record = getActiveHistoryRecord();
+    const snapCount = record?.evolutionSnapshots?.length ?? 1;
+    const lastSnap = record?.evolutionSnapshots?.[snapCount - 1];
+    const entrySnap = record?.evolutionSnapshots?.[0];
+
+    const windowEntryLabel = entrySnap?.label ?? "Print onde você entrou";
+    const windowCurrentLabel = lastSnap?.label ?? "Janela do print mais recente";
+
+    const statusRaw = (activeAnalysis.statusTrade || "").toUpperCase();
+    let oQueFazerTitulo = "MANTER POSIÇÃO";
+    let oQueFazerDetalhe =
+      activeAnalysis.comentarioAnalista ||
+      "A IA não encontrou alerta urgente. Acompanhe stop e alvo do ticket.";
+    let oQueFazerSeveridade: "hold" | "partial" | "exit" | "caution" = "hold";
+
+    if (statusRaw.includes("VENDER AGORA")) {
+      oQueFazerTitulo = "SAIR DA OPERAÇÃO AGORA";
+      oQueFazerSeveridade = "exit";
+    } else if (statusRaw.includes("STOP")) {
+      oQueFazerTitulo = "STOP ATIVADO — PROTEGER CAPITAL";
+      oQueFazerSeveridade = "exit";
+    } else if (statusRaw.includes("PARCIAL")) {
+      oQueFazerTitulo = "REALIZAR PARTE DO LUCRO";
+      oQueFazerSeveridade = "partial";
+    } else if (!favorable && Math.abs(diffPct) > 0.5) {
+      oQueFazerTitulo = isVenda ? "PREÇO SUBIU — ATENÇÃO NA VENDA" : "PREÇO CAIU — ATENÇÃO NA COMPRA";
+      oQueFazerSeveridade = "caution";
+    }
+
+    const acao = (activeAnalysis.acaoRecomendada || "").trim();
+    if (acao) {
+      oQueFazerDetalhe = `${acao}. ${oQueFazerDetalhe}`.slice(0, 420);
+    }
+
+    return {
+      entry,
+      current,
+      tipo,
+      isVenda,
+      diff,
+      diffPct,
+      favorable,
+      windowEntryLabel,
+      windowCurrentLabel,
+      snapCount,
+      oQueFazerTitulo,
+      oQueFazerDetalhe,
+      oQueFazerSeveridade,
+      statusTrade: activeAnalysis.statusTrade,
+    };
+  };
+
+  const tradeWindow = getTradeWindowAnalysis();
 
   const getTradeStatusDisplay = (status?: string) => {
     const s = (status || activeAnalysis.statusTrade || "").toUpperCase();
@@ -1117,6 +1296,17 @@ export default function App() {
     );
   };
 
+  const parseChartIntervalMinutes = (tempoGrafico: string): number => {
+    const t = (tempoGrafico || "").toLowerCase();
+    const match = t.match(/(\d+)\s*(min|minutos|m\b|hora|horas|h\b|dia|d\b)/);
+    if (!match) return 5;
+    const n = parseInt(match[1], 10);
+    const unit = match[2];
+    if (unit.startsWith("h")) return n * 60;
+    if (unit.startsWith("d")) return n * 1440;
+    return n;
+  };
+
   const renderDummyGraph = () => {
     const tendenciaRaw = activeAnalysis.tendencia;
     const momentoRaw = activeAnalysis.momento;
@@ -1162,8 +1352,35 @@ export default function App() {
 
     const priceLabel = (value: string) => formatDisplayPrice(value);
 
-    return (
-      <div className="flex items-end gap-2 h-full w-full justify-between pt-6 pb-2 px-1 relative select-none">
+    const priceRef =
+      activeAnalysis.pontoEntrada ||
+      activeAnalysis.precoAtualEstimado ||
+      activeAnalysis.alvo ||
+      "";
+    const isBrlAxis = /r\$/i.test(priceRef) || (!/\$/.test(priceRef) && priceRef.length > 0);
+    const formatAxisPriceNumber = (n: number) =>
+      isBrlAxis
+        ? `R$ ${n.toFixed(2).replace(".", ",")}`
+        : `$${n.toFixed(2)}`;
+
+    const priceTickCount = 5;
+    const priceTicks = Array.from({ length: priceTickCount }, (_, i) => {
+      const ratio = i / (priceTickCount - 1);
+      return maxRawPrice - ratio * rawPriceRange;
+    });
+
+    const intervalMin = parseChartIntervalMinutes(activeAnalysis.tempoGrafico || "5 Minutos");
+    const candleCount = activeCandles.length;
+    const now = new Date();
+    const timeLabels = activeCandles.map((_, i) => {
+      if (i === candleCount - 1) return "Agora";
+      const minutesAgo = (candleCount - 1 - i) * intervalMin;
+      const t = new Date(now.getTime() - minutesAgo * 60_000);
+      return t.toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" });
+    });
+
+    const chartBody = (
+      <div className="flex items-end gap-2 h-full w-full justify-between pt-6 pb-1 px-1 relative select-none">
         {renderPriceLevelLine(
           resistanceY,
           "border-[#ef5350]/35",
@@ -1267,6 +1484,43 @@ export default function App() {
             </div>
           );
         })}
+      </div>
+    );
+
+    return (
+      <div className="flex h-full w-full min-h-0 gap-0.5">
+        <div
+          className="flex flex-col shrink-0 w-11 sm:w-[3.25rem] h-full py-5 pb-6 pr-0.5 pointer-events-none border-r border-[#363a45]/40"
+          aria-label="Eixo de preço"
+        >
+          <span className="text-[7px] uppercase tracking-wider text-[#5c5f6a] text-center font-mono mb-1 shrink-0">
+            Preço
+          </span>
+          <div className="flex-1 flex flex-col justify-between text-[8px] sm:text-[9px] font-mono text-[#787b86] tabular-nums text-right min-h-0">
+            {priceTicks.map((p) => (
+              <span key={p} className="leading-none">
+                {formatAxisPriceNumber(p)}
+              </span>
+            ))}
+          </div>
+        </div>
+
+        <div className="flex-1 flex flex-col min-w-0 min-h-0">
+          <div className="flex-1 relative min-h-0">{chartBody}</div>
+          <div
+            className="flex justify-between gap-px pt-1.5 mt-0.5 border-t border-[#363a45]/60 shrink-0 text-[7px] sm:text-[8px] font-mono text-[#787b86] pointer-events-none"
+            aria-label="Eixo de tempo"
+          >
+            {timeLabels.map((label, i) => (
+              <span key={`${label}-${i}`} className="flex-1 text-center truncate leading-tight">
+                {label}
+              </span>
+            ))}
+          </div>
+          <div className="text-[7px] text-[#5c5f6a] text-center font-mono mt-0.5 shrink-0 pointer-events-none">
+            Tempo · {activeAnalysis.tempoGrafico || "intervalo estimado"}
+          </div>
+        </div>
       </div>
     );
   };
@@ -1425,7 +1679,7 @@ export default function App() {
       : "";
 
     const rr = activeAnalysis.relacaoRiscoRetorno || getRiskRewardDisplay();
-    const dados = buildDadosCompra();
+    const dados = getEffectiveDadosCompra();
     const roi = liveRoi();
     const tradeBlock =
       dados && roi
@@ -2243,7 +2497,7 @@ CandleScan FÁCIL • Análise didática com IA — use sempre stop loss.
                     Dados do Meu Investimento
                   </h3>
                   <p className="text-[11px] text-zinc-500 mt-0.5">
-                    Preencha para a IA agir como gerente do seu trade (lucro/prejuízo em tempo real).
+                    Informe o preço do print inicial; nas atualizações o valor de entrada é mantido.
                   </p>
                 </div>
               </div>
@@ -2254,18 +2508,59 @@ CandleScan FÁCIL • Análise didática com IA — use sempre stop loss.
               )}
             </div>
 
+            {isTradeEntryLocked() && getEffectiveDadosCompra() && (
+              <p className="text-[11px] text-sky-300/95 bg-sky-500/10 border border-sky-500/30 rounded-lg px-3 py-2 font-mono">
+                {formatOperacaoLabel(getEffectiveTipoOperacao())}{" "}
+                {formatInvestedPriceDisplay(getEffectiveDadosCompra()!.precoEntrada)} — valor da
+                entrada mantido em todas as janelas desta sessão.
+              </p>
+            )}
+
+            <div className="flex flex-wrap gap-2">
+              <span className="text-[11px] font-semibold uppercase tracking-wide text-zinc-400 self-center">
+                Operação no print
+              </span>
+              <button
+                type="button"
+                disabled={isTradeEntryLocked()}
+                onClick={() => setTradeOperacao("compra")}
+                className={`px-3 py-1.5 rounded-lg text-xs font-bold border transition ${
+                  tradeOperacao === "compra"
+                    ? "bg-emerald-500/20 border-emerald-500/50 text-emerald-300"
+                    : "bg-zinc-900 border-zinc-700 text-zinc-400"
+                } ${isTradeEntryLocked() ? "opacity-60 cursor-not-allowed" : "cursor-pointer"}`}
+              >
+                Comprei
+              </button>
+              <button
+                type="button"
+                disabled={isTradeEntryLocked()}
+                onClick={() => setTradeOperacao("venda")}
+                className={`px-3 py-1.5 rounded-lg text-xs font-bold border transition ${
+                  tradeOperacao === "venda"
+                    ? "bg-rose-500/20 border-rose-500/50 text-rose-300"
+                    : "bg-zinc-900 border-zinc-700 text-zinc-400"
+                } ${isTradeEntryLocked() ? "opacity-60 cursor-not-allowed" : "cursor-pointer"}`}
+              >
+                Vendi
+              </button>
+            </div>
+
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <label className="space-y-1.5">
                 <span className="text-[11px] font-semibold uppercase tracking-wide text-zinc-400">
-                  Preço de Compra (por papel)
+                  Preço da operação (por papel)
                 </span>
                 <input
                   type="text"
                   inputMode="decimal"
-                  placeholder="Ex: 4,28"
+                  placeholder="Ex: 45,40"
                   value={investedPrice}
+                  readOnly={isTradeEntryLocked()}
                   onChange={(e) => setInvestedPrice(e.target.value)}
-                  className="w-full bg-[#111112] border border-zinc-800 rounded-lg px-3 py-2.5 text-sm font-mono text-white placeholder:text-zinc-600 focus:border-sky-500/60 focus:outline-none"
+                  className={`w-full bg-[#111112] border border-zinc-800 rounded-lg px-3 py-2.5 text-sm font-mono text-white placeholder:text-zinc-600 focus:border-sky-500/60 focus:outline-none ${
+                    isTradeEntryLocked() ? "opacity-80 cursor-not-allowed" : ""
+                  }`}
                 />
               </label>
               <label className="space-y-1.5">
@@ -2277,17 +2572,20 @@ CandleScan FÁCIL • Análise didática com IA — use sempre stop loss.
                   inputMode="decimal"
                   placeholder="Ex: 1000"
                   value={investedAmount}
+                  readOnly={isTradeEntryLocked()}
                   onChange={(e) => setInvestedAmount(e.target.value)}
-                  className="w-full bg-[#111112] border border-zinc-800 rounded-lg px-3 py-2.5 text-sm font-mono text-white placeholder:text-zinc-600 focus:border-sky-500/60 focus:outline-none"
+                  className={`w-full bg-[#111112] border border-zinc-800 rounded-lg px-3 py-2.5 text-sm font-mono text-white placeholder:text-zinc-600 focus:border-sky-500/60 focus:outline-none ${
+                    isTradeEntryLocked() ? "opacity-80 cursor-not-allowed" : ""
+                  }`}
                 />
               </label>
             </div>
 
-            {isPositioned() && buildDadosCompra() && (
+            {isPositioned() && getEffectiveDadosCompra() && (
               <p className="text-[11px] text-zinc-500 font-mono">
                 Quantidade estimada:{" "}
                 <strong className="text-sky-300">
-                  {buildDadosCompra()!.quantidade.toFixed(4)} papéis
+                  {getEffectiveDadosCompra()!.quantidade.toFixed(4)} papéis
                 </strong>
                 {uploadedPhotos.length > 1 && (
                   <span className="text-zinc-600">
@@ -2407,7 +2705,9 @@ CandleScan FÁCIL • Análise didática com IA — use sempre stop loss.
                     </button>
                   </div>
                   <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-                    {uploadedPhotos.map((photo, index) => (
+                    {uploadedPhotos.map((photo, index) => {
+                      const investBadge = getPhotoInvestmentBadge(index);
+                      return (
                       <div key={photo.id} className="relative bg-[#111] border border-zinc-800 rounded-lg p-2 flex flex-col group overflow-hidden">
                         <img 
                            src={photo.base64} 
@@ -2415,6 +2715,11 @@ CandleScan FÁCIL • Análise didática com IA — use sempre stop loss.
                           className="h-20 w-full object-cover rounded-md cursor-zoom-in hover:brightness-110 transition"
                           onClick={() => setPreviewImage(photo.base64)}
                         />
+                        {investBadge && (
+                          <span className="absolute top-3 left-3 right-3 text-[9px] font-bold font-mono text-sky-100 bg-sky-950/90 border border-sky-500/50 px-1.5 py-0.5 rounded shadow-lg truncate">
+                            {investBadge}
+                          </span>
+                        )}
                         <div className="flex items-center justify-between mt-1.5">
                           <span className="text-[10px] text-zinc-400 truncate max-w-[80%]" title={photo.name}>
                             {index + 1}. {photo.name}
@@ -2431,7 +2736,8 @@ CandleScan FÁCIL • Análise didática com IA — use sempre stop loss.
                           </button>
                         </div>
                       </div>
-                    ))}
+                    );
+                    })}
                     {/* Fast add photo thumbnail block */}
                     <label 
                       htmlFor="graph-file-input-extra" 
@@ -2708,6 +3014,91 @@ CandleScan FÁCIL • Análise didática com IA — use sempre stop loss.
               </div>
             </div>
 
+            {isPositioned() && tradeWindow && (
+              <div className="mx-4 md:mx-5 mt-4 rounded-xl border-2 border-sky-500/40 bg-[#0d1017]/90 p-4 md:p-5 space-y-4">
+                <div className="flex flex-wrap items-center justify-between gap-2 border-b border-[#363a45] pb-3">
+                  <h3 className="text-sm font-black uppercase tracking-wider text-sky-300 flex items-center gap-2">
+                    <LineChart className="h-4 w-4" />
+                    Análise: onde entrei vs janela atual
+                  </h3>
+                  <span className="text-[10px] font-mono text-zinc-500">
+                    {tradeWindow.snapCount}{" "}
+                    {tradeWindow.snapCount === 1 ? "janela" : "janelas"} de print
+                  </span>
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-3 md:gap-4">
+                  <div className="rounded-lg border border-amber-500/50 bg-amber-500/5 p-4 text-center">
+                    <span className="text-[10px] font-black uppercase tracking-widest text-amber-400/90 block mb-1">
+                      Onde {tradeWindow.isVenda ? "vendi" : "comprei"}
+                    </span>
+                    <p className="text-2xl md:text-3xl font-mono font-bold text-amber-300 tabular-nums">
+                      {formatInvestedPriceDisplay(tradeWindow.entry)}
+                    </p>
+                    <p className="text-[10px] text-zinc-500 mt-2 font-mono">
+                      {formatOperacaoLabel(tradeWindow.tipo)} · {tradeWindow.windowEntryLabel}
+                    </p>
+                  </div>
+
+                  <div className="rounded-lg border border-sky-500/50 bg-sky-500/5 p-4 text-center flex flex-col justify-center">
+                    <span className="text-[10px] font-black uppercase tracking-widest text-sky-400/90 block mb-1">
+                      Onde está agora (último print)
+                    </span>
+                    <p className="text-2xl md:text-3xl font-mono font-bold text-sky-200 tabular-nums">
+                      {formatInvestedPriceDisplay(tradeWindow.current)}
+                    </p>
+                    <p
+                      className={`text-sm font-mono font-bold mt-2 ${
+                        tradeWindow.favorable ? "text-[#26a69a]" : "text-[#ef5350]"
+                      }`}
+                    >
+                      {tradeWindow.diff >= 0 ? "+" : ""}
+                      {tradeWindow.diff.toFixed(2).replace(".", ",")} (
+                      {tradeWindow.diffPct >= 0 ? "+" : ""}
+                      {tradeWindow.diffPct.toFixed(2).replace(".", ",")}%)
+                      {tradeWindow.isVenda ? " vs sua venda" : " vs sua compra"}
+                    </p>
+                    <p className="text-[10px] text-zinc-500 mt-1 font-mono">
+                      {tradeWindow.windowCurrentLabel}
+                    </p>
+                  </div>
+
+                  <div
+                    className={`rounded-lg border-2 p-4 text-center ${
+                      tradeWindow.oQueFazerSeveridade === "exit"
+                        ? "border-orange-500/70 bg-orange-500/10"
+                        : tradeWindow.oQueFazerSeveridade === "partial"
+                        ? "border-amber-500/70 bg-amber-500/10"
+                        : tradeWindow.oQueFazerSeveridade === "caution"
+                        ? "border-rose-500/50 bg-rose-500/10"
+                        : "border-[#26a69a]/50 bg-[#26a69a]/10"
+                    }`}
+                  >
+                    <span className="text-[10px] font-black uppercase tracking-widest text-zinc-400 block mb-1">
+                      O que fazer agora
+                    </span>
+                    <p className="text-lg md:text-xl font-black uppercase tracking-tight text-white leading-tight">
+                      {tradeWindow.oQueFazerTitulo}
+                    </p>
+                    {tradeWindow.statusTrade && (
+                      <p className="text-xs font-mono text-zinc-400 mt-1">
+                        Status IA: {tradeWindow.statusTrade}
+                      </p>
+                    )}
+                  </div>
+                </div>
+
+                <div className="bg-[#131722] border border-[#363a45] rounded-lg p-3 md:p-4">
+                  <span className="text-[10px] font-bold uppercase text-zinc-500 block mb-1">
+                    Conselho do gerente (IA)
+                  </span>
+                  <p className="text-sm text-[#d1d4dc] leading-relaxed font-sans">
+                    {tradeWindow.oQueFazerDetalhe}
+                  </p>
+                </div>
+              </div>
+            )}
+
             {isPositioned() && roiData && (
               <div
                 className={`mx-4 md:mx-5 mt-4 rounded-xl border-2 p-4 md:p-5 ${
@@ -2740,12 +3131,15 @@ CandleScan FÁCIL • Análise didática com IA — use sempre stop loss.
                     </p>
                   </div>
                   <div className="text-[11px] text-zinc-500 md:text-right max-w-sm">
-                    Compra:{" "}
+                    {formatOperacaoLabel(getEffectiveTipoOperacao())}:{" "}
                     <strong className="text-zinc-300">
-                      R$ {buildDadosCompra()!.precoEntrada.toFixed(2).replace(".", ",")}
+                      {formatInvestedPriceDisplay(getEffectiveDadosCompra()!.precoEntrada)}
                     </strong>
                     {" · "}
-                    Investido: R$ {getValorInvestidoTotal().toFixed(2).replace(".", ",")}
+                    Investido: R${" "}
+                    {(getEffectiveValorInvestido() ?? getValorInvestidoTotal())
+                      .toFixed(2)
+                      .replace(".", ",")}
                   </div>
                 </div>
               </div>

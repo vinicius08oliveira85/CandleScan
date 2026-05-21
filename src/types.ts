@@ -11,9 +11,13 @@ export type TradeStatus =
   | "REALIZAR PARCIAL"
   | "STOP ATIVADO";
 
+export type TipoOperacao = "compra" | "venda";
+
 export interface DadosCompra {
   precoEntrada: number;
   quantidade: number;
+  /** Compra ou venda informada pelo usuário no print */
+  tipoOperacao?: TipoOperacao;
 }
 
 export interface ChartAnalysis {
@@ -92,6 +96,10 @@ export interface EvolutionSnapshot {
   capturedAt: string;
   label: string;
   images: SavedAnalysisImage[];
+  /** Preço e valor fixados nesta janela/print */
+  dadosCompra?: DadosCompra;
+  valorInvestidoTotal?: number;
+  tipoOperacao?: TipoOperacao;
 }
 
 export interface SavedAnalysis {
@@ -112,6 +120,7 @@ export interface SavedAnalysis {
   dadosCompra?: DadosCompra;
   /** Valor total investido (R$) — espelha o input do usuário */
   valorInvestidoTotal?: number;
+  tipoOperacao?: TipoOperacao;
   isLiveTrade?: boolean;
   lastUpdatedAt?: string;
 }
