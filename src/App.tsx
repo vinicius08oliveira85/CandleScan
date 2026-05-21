@@ -84,6 +84,7 @@ export default function App() {
   const [geminiApiKey, setGeminiApiKey] = useState<string>("");
   const [showApiKey, setShowApiKey] = useState(false);
   const [serverHasGeminiKey, setServerHasGeminiKey] = useState<boolean | null>(null);
+  const [serverVercelEnv, setServerVercelEnv] = useState<string | null>(null);
   // Interactive full-screen preview state
   const [previewImage, setPreviewImage] = useState<string | null>(null);
   const [copiedField, setCopiedField] = useState<string | null>(null);
@@ -168,8 +169,14 @@ export default function App() {
   useEffect(() => {
     fetch("/api/health")
       .then((r) => (r.ok ? r.json() : null))
-      .then((data) => setServerHasGeminiKey(!!data?.geminiConfigured))
-      .catch(() => setServerHasGeminiKey(false));
+      .then((data) => {
+        setServerHasGeminiKey(!!data?.geminiConfigured);
+        setServerVercelEnv(data?.vercelEnv ?? null);
+      })
+      .catch(() => {
+        setServerHasGeminiKey(false);
+        setServerVercelEnv(null);
+      });
   }, []);
 
   const getResolvedApiKey = useCallback(() => {
@@ -1672,8 +1679,11 @@ CandleScan FÁCIL • Análise didática com IA — use sempre stop loss.
             )}
             {serverHasGeminiKey === false && !getResolvedApiKey() && (
               <p className="text-[11px] text-amber-300/90 bg-amber-500/10 border border-amber-500/30 rounded-lg px-3 py-2">
-                Nenhuma chave detectada no servidor nem neste navegador. Cole sua chave abaixo e
-                clique em Salvar antes de traduzir o gráfico.
+                Nenhuma chave no servidor
+                {serverVercelEnv ? ` (ambiente: ${serverVercelEnv})` : ""} nem neste navegador.
+                Cole sua chave abaixo e clique em Salvar — ou na Vercel marque{" "}
+                <strong className="text-amber-200">Production</strong> ao criar GEMINI_API_KEY (não só
+                Preview).
               </p>
             )}
 

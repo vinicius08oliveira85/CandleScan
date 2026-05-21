@@ -2,14 +2,8 @@
   "version": 2,
   "buildCommand": "npm run vercel-build",
   "outputDirectory": "dist",
-  "rewrites": [
-    {
-      "source": "/api/(.*)",
-      "destination": "/api"
-    }
-  ],
   "functions": {
-    "api/index.js": {
+    "api/**/*.js": {
       "maxDuration": 60,
       "memory": 1024,
       "includeFiles": "dist/server.cjs"

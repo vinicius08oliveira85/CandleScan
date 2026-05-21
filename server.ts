@@ -124,6 +124,7 @@ app.get('/api/health', (_req, res) => {
   res.json({
     ok: true,
     geminiConfigured: !!resolveGeminiApiKey(),
+    vercelEnv: process.env.VERCEL_ENV || 'local',
   });
 });
 
