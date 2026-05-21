@@ -1,5 +1,4 @@
 import express from 'express';
-import path from 'path';
 import { GoogleGenAI, Type } from '@google/genai';
 import dotenv from 'dotenv';
 
@@ -281,14 +280,6 @@ app.post('/api/analyze-multi', async (req, res) => {
       error: err.message || 'Ocorreu um erro interno na análise múltipla dos gráficos.' 
     });
   }
-});
-
-// Setup client serving
-const distPath = path.join(process.cwd(), 'dist');
-app.use(express.static(distPath));
-// Serve index.html for SPA router fallbacks
-app.get('*', (req, res) => {
-  res.sendFile(path.join(distPath, 'index.html'));
 });
 
 app.listen(port, () => {
