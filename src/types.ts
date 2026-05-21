@@ -3,6 +3,37 @@ export interface SyntheticCandle {
   high: number;
   low: number;
   close: number;
+  /** Unix segundos (MetaTrader 5) */
+  time?: number;
+  tick_volume?: number;
+}
+
+export interface Mt5HealthResponse {
+  ok: boolean;
+  mt5Connected?: boolean;
+  terminal?: string;
+  company?: string;
+  account?: number;
+  server?: string;
+  error?: string;
+  serverTime?: string;
+}
+
+export interface Mt5CandlesResponse {
+  symbol: string;
+  timeframe: string;
+  candles: SyntheticCandle[];
+  serverTime: string;
+}
+
+export interface Mt5TickResponse {
+  symbol: string;
+  bid: number;
+  ask: number;
+  last: number;
+  mid: number;
+  time: number;
+  serverTime: string;
 }
 
 export type TradeStatus =

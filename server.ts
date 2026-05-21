@@ -12,6 +12,12 @@ import {
   MULTI_ANALYSIS_SCHEMA,
 } from './shared/geminiSchemas';
 import { geminiErrorResponseBody } from './shared/geminiErrors';
+import {
+  LIVE_ANALYSIS_SYSTEM_INSTRUCTION,
+  buildLiveAnalysisPrompt,
+  buildCandleTimeLabelsFromMt5,
+  timeframeLabel,
+} from './shared/analyzeLive';
 
 try {
   dotenv.config({ path: '.env.local' });
@@ -178,6 +184,71 @@ const analyzeHandler = async (req: express.Request, res: express.Response) => {
 
 app.post('/api/analyze', analyzeHandler);
 app.post('/analyze', analyzeHandler);
+
+const analyzeLiveHandler = async (req: express.Request, res: express.Response) => {
+  try {
+    const { symbol, timeframe, candles, precoAtual, dadosCompra, apiKey } = req.body as {
+      symbol?: string;
+      timeframe?: string;
+      candles?: { open: number; high: number; low: number; close: number; time?: number }[];
+      precoAtual?: number;
+      dadosCompra?: { precoEntrada: number; quantidade: number; tipoOperacao?: string };
+      apiKey?: string;
+    };
+
+    if (!symbol?.trim()) {
+      return res.status(400).json({ error: 'Símbolo MT5 obrigatório.' });
+    }
+    if (!candles || !Array.isArray(candles) || candles.length < 2) {
+      return res.status(400).json({ error: 'Envie pelo menos 2 candles OHLC do MT5.' });
+    }
+
+    const tf = (timeframe || 'M5').trim();
+    const slice = candles.slice(-10);
+    const aiInstance = getGeminiClient(apiKey);
+    const promptText = buildLiveAnalysisPrompt(
+      symbol.trim(),
+      tf,
+      slice,
+      precoAtual ?? null,
+      dadosCompra
+    );
+
+    const parts = buildGeminiParts(promptText, []);
+    const textOutput = await generateGeminiJson(
+      aiInstance,
+      LIVE_ANALYSIS_SYSTEM_INSTRUCTION,
+      parts,
+      CHART_ANALYSIS_SCHEMA
+    );
+
+    if (!textOutput) {
+      throw new Error('Resposta vazia do Gemini na análise MT5.');
+    }
+
+    const parsed = JSON.parse(textOutput.trim()) as Record<string, unknown>;
+    parsed.syntheticCandles = slice;
+    parsed.candleTimeLabels = buildCandleTimeLabelsFromMt5(slice);
+    parsed.ativoCooptado = symbol.trim();
+    parsed.tempoGrafico = timeframeLabel(tf);
+    parsed.graficoReferenciaEm = new Date().toISOString();
+    if (precoAtual != null && Number.isFinite(precoAtual)) {
+      const brl = !symbol.includes('.') && !symbol.startsWith('#');
+      parsed.precoAtualEstimado = brl
+        ? `R$ ${precoAtual.toFixed(2).replace('.', ',')}`
+        : `$${precoAtual.toFixed(2)}`;
+    }
+
+    return res.json(parsed);
+  } catch (err: unknown) {
+    console.error('Erro na rota /api/analyze-live:', err);
+    const { httpStatus, payload } = geminiErrorResponseBody(err);
+    return res.status(httpStatus).json(payload);
+  }
+};
+
+app.post('/api/analyze-live', analyzeLiveHandler);
+app.post('/analyze-live', analyzeLiveHandler);
 
 const MULTI_SYSTEM_INSTRUCTION = `Você é um analista profissional de trading amigável e focado em EXPLICAR DE FORMA SIMPLES para iniciantes e leigos.
 Sua função é analisar dois prints de gráficos simultaneamente: um gráfico de 5 minutos (M5) e um de 15 minutos (M15) do MESMO ativo financeiro.

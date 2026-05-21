@@ -1,3 +1,6 @@
+import {
+  buildCandleTimeLabelsFromMt5,
+} from "../shared/analyzeLive";
 import type { ChartAnalysis, SyntheticCandle } from "./types";
 
 export function parsePriceFromString(priceString: string): number | null {
@@ -306,4 +309,43 @@ export function priceToChartPercent(
   chartRange: number
 ): number {
   return Math.max(2, Math.min(98, ((price - chartMin) / chartRange) * 100));
+}
+
+/** Gráfico alimentado diretamente pelo MT5 (OHLC reais) */
+export function buildChartViewModelFromLive(
+  candles: SyntheticCandle[],
+  options?: {
+    anchorPrices?: number[];
+    isBrlAxis?: boolean;
+    precoAtual?: number | null;
+  }
+): ChartViewBounds {
+  const list = candles.map(sanitizeCandle);
+  const anchors = (options?.anchorPrices ?? []).filter((p) => p > 0);
+  const nums = [
+    ...list.flatMap((c) => [c.open, c.close, c.high, c.low]),
+    ...anchors,
+  ];
+  if (options?.precoAtual != null && options.precoAtual > 0) {
+    nums.push(options.precoAtual);
+  }
+
+  let chartMin = Math.min(...nums);
+  let chartMax = Math.max(...nums);
+  const pad = (chartMax - chartMin) * 0.08 || 0.05;
+  chartMin -= pad;
+  chartMax += pad;
+  const chartRange = chartMax - chartMin || 1;
+
+  const timeLabels = buildCandleTimeLabelsFromMt5(list);
+  const isBrlAxis = options?.isBrlAxis ?? true;
+
+  return {
+    chartMin,
+    chartMax,
+    chartRange,
+    candles: list,
+    timeLabels,
+    isBrlAxis,
+  };
 }

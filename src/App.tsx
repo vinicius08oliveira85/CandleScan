@@ -41,6 +41,7 @@ import {
   BeforeInstallPromptEvent,
   DadosCompra,
   TipoOperacao,
+  SyntheticCandle,
 } from "./types";
 import { PRESET_CHARTS, PRESET_MULTI_CHARTS } from "./data/presets";
 import {
@@ -55,8 +56,23 @@ import {
 import {
   normalizeChartAnalysis,
   buildChartViewModel,
+  buildChartViewModelFromLive,
   priceToChartPercent,
+  collectAnchorPrices,
 } from "./chartData";
+import {
+  getBridgeUrl,
+  setBridgeUrl,
+  getBridgeApiKey,
+  setBridgeApiKey,
+  fetchMt5Health,
+  fetchMt5Candles,
+  fetchMt5Tick,
+  pollIntervalMs,
+  normalizeTimeframeInput,
+  detectNewClosedCandle,
+  subscribeMt5CandleStream,
+} from "./mt5Client";
 import { motion } from "motion/react";
 
 export default function App() {
@@ -100,6 +116,22 @@ export default function App() {
   const [showApiKey, setShowApiKey] = useState(false);
   const [serverHasGeminiKey, setServerHasGeminiKey] = useState<boolean | null>(null);
   const [serverVercelEnv, setServerVercelEnv] = useState<string | null>(null);
+
+  // MetaTrader 5 — ponte local
+  const [mt5LiveEnabled, setMt5LiveEnabled] = useState(false);
+  const [mt5BridgeUrl, setMt5BridgeUrl] = useState(() => getBridgeUrl());
+  const [mt5BridgeKeyInput, setMt5BridgeKeyInput] = useState(() => getBridgeApiKey());
+  const [mt5Symbol, setMt5Symbol] = useState("PETR4");
+  const [mt5Timeframe, setMt5Timeframe] = useState("M5");
+  const [mt5LiveCandles, setMt5LiveCandles] = useState<SyntheticCandle[] | null>(null);
+  const [mt5ResolvedSymbol, setMt5ResolvedSymbol] = useState<string | null>(null);
+  const [mt5TickMid, setMt5TickMid] = useState<number | null>(null);
+  const [mt5Status, setMt5Status] = useState<"offline" | "connecting" | "live" | "error">("offline");
+  const [mt5StatusMessage, setMt5StatusMessage] = useState("");
+  const [mt5AutoAnalyze, setMt5AutoAnalyze] = useState(false);
+  const [mt5UseStream, setMt5UseStream] = useState(true);
+  const mt5PrevCandlesRef = useRef<SyntheticCandle[] | null>(null);
+  const mt5LastAutoAnalyzeRef = useRef<number>(0);
   // Interactive full-screen preview state
   const [previewImage, setPreviewImage] = useState<string | null>(null);
   const [copiedField, setCopiedField] = useState<string | null>(null);
@@ -170,6 +202,21 @@ export default function App() {
 
   useEffect(() => {
     try {
+      const mt5On = localStorage.getItem("candlescan_mt5_live_enabled") === "1";
+      const sym = localStorage.getItem("candlescan_mt5_symbol");
+      const tf = localStorage.getItem("candlescan_mt5_timeframe");
+      if (mt5On) setMt5LiveEnabled(true);
+      if (sym) setMt5Symbol(sym);
+      if (tf) setMt5Timeframe(tf);
+      const auto = localStorage.getItem("candlescan_mt5_auto_analyze") === "1";
+      if (auto) setMt5AutoAnalyze(true);
+    } catch {
+      /* ignore */
+    }
+  }, []);
+
+  useEffect(() => {
+    try {
       const stored = localStorage.getItem("geminiApiKey");
       if (stored) setGeminiApiKey(stored);
     } catch {
@@ -235,6 +282,223 @@ export default function App() {
     setActiveTab("settings");
     setShowSettingsTab(true);
   };
+
+  const handleSaveMt5Settings = () => {
+    setBridgeUrl(mt5BridgeUrl);
+    setBridgeApiKey(mt5BridgeKeyInput);
+    try {
+      localStorage.setItem("candlescan_mt5_live_enabled", mt5LiveEnabled ? "1" : "0");
+      localStorage.setItem("candlescan_mt5_symbol", mt5Symbol.trim());
+      localStorage.setItem("candlescan_mt5_timeframe", mt5Timeframe);
+      localStorage.setItem("candlescan_mt5_auto_analyze", mt5AutoAnalyze ? "1" : "0");
+    } catch {
+      /* ignore */
+    }
+    setToastType("settings");
+    setToastMessage("Configurações da ponte MT5 salvas.");
+    setShowSuccessToast(true);
+  };
+
+  const handleTestMt5Bridge = async () => {
+    setBridgeUrl(mt5BridgeUrl);
+    setBridgeApiKey(mt5BridgeKeyInput);
+    setMt5Status("connecting");
+    setMt5StatusMessage("Testando conexão...");
+    try {
+      const health = await fetchMt5Health();
+      if (!health.ok || !health.mt5Connected) {
+        setMt5Status("error");
+        setMt5StatusMessage(health.error || "MT5 não conectado — abra o terminal e faça login.");
+        return;
+      }
+      const data = await fetchMt5Candles(mt5Symbol, mt5Timeframe, 3);
+      setMt5Status("live");
+      setMt5StatusMessage(
+        `Conectado: ${health.terminal || "MT5"} · ${data.symbol} · conta ${health.account ?? "—"}`
+      );
+      setMt5ResolvedSymbol(data.symbol);
+    } catch (e) {
+      setMt5Status("error");
+      setMt5StatusMessage(e instanceof Error ? e.message : "Falha ao conectar na ponte MT5.");
+    }
+  };
+
+  const applyMt5Payload = useCallback(
+    (candles: SyntheticCandle[], symbol: string, mid: number | null) => {
+      const prev = mt5PrevCandlesRef.current;
+      const newClosed = detectNewClosedCandle(prev, candles);
+      mt5PrevCandlesRef.current = candles;
+      setMt5LiveCandles(candles);
+      setMt5ResolvedSymbol(symbol);
+      if (mid != null) {
+        setMt5TickMid(mid);
+        setActiveAnalysis((a) => ({
+          ...a,
+          ativoCooptado: symbol,
+          precoAtualEstimado: `R$ ${mid.toFixed(2).replace(".", ",")}`,
+        }));
+      }
+      setMt5Status("live");
+      setMt5StatusMessage(`Ao vivo · ${symbol} · ${normalizeTimeframeInput(mt5Timeframe)}`);
+      return newClosed;
+    },
+    [mt5Timeframe]
+  );
+
+  const requestMt5LiveAnalysis = async () => {
+    if (!mt5LiveCandles || mt5LiveCandles.length < 2) {
+      setAnalysisError("Ative o MT5 e aguarde os candles antes de analisar.");
+      return;
+    }
+    if (!ensureApiKeyForAnalysis()) return;
+
+    setIsAnalyzing(true);
+    setAnalysisError(null);
+    const symbol = mt5ResolvedSymbol || mt5Symbol;
+    const dadosCompra = getEffectiveDadosCompra();
+
+    try {
+      const trimmedKey = getResolvedApiKey();
+      const res = await fetch("/api/analyze-live", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          symbol,
+          timeframe: normalizeTimeframeInput(mt5Timeframe),
+          candles: mt5LiveCandles,
+          precoAtual: mt5TickMid,
+          dadosCompra,
+          ...(trimmedKey ? { apiKey: trimmedKey } : {}),
+        }),
+      });
+
+      if (!res.ok) {
+        const errJson = await parseApiErrorResponse(res);
+        throw new Error(formatAnalysisErrorMessage(res, errJson));
+      }
+
+      const data: ChartAnalysis = await res.json();
+      const normalized = normalizeChartAnalysis(
+        {
+          ...data,
+          syntheticCandles: mt5LiveCandles,
+          ativoCooptado: symbol,
+          tempoGrafico: data.tempoGrafico || `${mt5Timeframe}`,
+        },
+        dadosCompra?.precoEntrada
+      );
+      setActiveAnalysis(normalized);
+      setSelectedPresetId("");
+      persistAnalysisToHistory(normalized, uploadedPhotos, null);
+
+      setToastType("analyze");
+      setToastMessage(`Análise MT5 ao vivo: ${symbol}`);
+      setShowSuccessToast(true);
+    } catch (err: unknown) {
+      setAnalysisError(err instanceof Error ? err.message : "Erro na análise MT5.");
+    } finally {
+      setIsAnalyzing(false);
+    }
+  };
+
+  useEffect(() => {
+    if (!mt5LiveEnabled) {
+      setMt5Status("offline");
+      setMt5StatusMessage("");
+      return;
+    }
+
+    setBridgeUrl(mt5BridgeUrl);
+    setBridgeApiKey(mt5BridgeKeyInput);
+    const symbol = mt5Symbol.trim();
+    const tf = normalizeTimeframeInput(mt5Timeframe);
+    if (!symbol) return;
+
+    setMt5Status("connecting");
+
+    let cancelled = false;
+    let unsubscribe: (() => void) | undefined;
+    let pollTimer: ReturnType<typeof setInterval> | undefined;
+
+    const pull = async () => {
+      try {
+        const [candleRes, tickRes] = await Promise.all([
+          fetchMt5Candles(symbol, tf, 10),
+          fetchMt5Tick(symbol).catch(() => null),
+        ]);
+        if (cancelled) return;
+        const mid = tickRes?.mid ?? null;
+        const newClosed = applyMt5Payload(candleRes.candles, candleRes.symbol, mid);
+
+        if (
+          newClosed &&
+          mt5AutoAnalyze &&
+          !isAnalyzing &&
+          Date.now() - mt5LastAutoAnalyzeRef.current > 45_000
+        ) {
+          mt5LastAutoAnalyzeRef.current = Date.now();
+          void requestMt5LiveAnalysis();
+        }
+      } catch (e) {
+        if (cancelled) return;
+        setMt5Status("error");
+        setMt5StatusMessage(
+          e instanceof Error ? e.message : "Ponte MT5 indisponível. Rode npm run dev:mt5"
+        );
+      }
+    };
+
+    if (mt5UseStream) {
+      unsubscribe = subscribeMt5CandleStream(
+        symbol,
+        tf,
+        10,
+        (payload) => {
+          if (cancelled || payload.error) return;
+          if (payload.candles?.length) {
+            const mid = payload.tick?.mid ?? null;
+            const newClosed = applyMt5Payload(payload.candles, payload.symbol, mid);
+            if (
+              newClosed &&
+              mt5AutoAnalyze &&
+              !isAnalyzing &&
+              Date.now() - mt5LastAutoAnalyzeRef.current > 45_000
+            ) {
+              mt5LastAutoAnalyzeRef.current = Date.now();
+              void requestMt5LiveAnalysis();
+            }
+          }
+        },
+        () => {
+          if (!cancelled) {
+            setMt5Status("error");
+            setMt5StatusMessage("Stream MT5 falhou — usando polling.");
+            void pull();
+            pollTimer = setInterval(pull, pollIntervalMs(tf));
+          }
+        }
+      );
+    } else {
+      void pull();
+      pollTimer = setInterval(pull, pollIntervalMs(tf));
+    }
+
+    return () => {
+      cancelled = true;
+      unsubscribe?.();
+      if (pollTimer) clearInterval(pollTimer);
+    };
+  }, [
+    mt5LiveEnabled,
+    mt5BridgeUrl,
+    mt5BridgeKeyInput,
+    mt5Symbol,
+    mt5Timeframe,
+    mt5UseStream,
+    mt5AutoAnalyze,
+    applyMt5Payload,
+    isAnalyzing,
+  ]);
 
   const ensureApiKeyForAnalysis = (): boolean => {
     if (hasPersonalApiKey()) return true;
@@ -1186,10 +1450,18 @@ export default function App() {
   };
 
   const renderDummyGraph = () => {
-    const chartVm = buildChartViewModel(
-      activeAnalysis,
-      getEffectiveDadosCompra()?.precoEntrada
-    );
+    const userEntry = getEffectiveDadosCompra()?.precoEntrada ?? null;
+    const anchorPrices = collectAnchorPrices(activeAnalysis, userEntry);
+
+    const chartVm =
+      mt5LiveEnabled && mt5LiveCandles && mt5LiveCandles.length >= 2
+        ? buildChartViewModelFromLive(mt5LiveCandles, {
+            anchorPrices,
+            precoAtual: mt5TickMid,
+            isBrlAxis: true,
+          })
+        : buildChartViewModel(activeAnalysis, userEntry);
+
     const { chartMin, chartMax, chartRange, candles: realCandles, timeLabels, isBrlAxis } =
       chartVm;
 
@@ -1943,6 +2215,131 @@ CandleScan FÁCIL • Análise didática com IA — use sempre stop loss.
                 </span>
               ) : null}
             </div>
+          </div>
+
+          <div className="rounded-xl border border-cyan-500/30 bg-cyan-950/20 p-4 space-y-4">
+            <div className="flex items-center gap-2">
+              <LineChart className="h-5 w-5 text-cyan-400 shrink-0" />
+              <div>
+                <h4 className="font-bold text-sm text-white">Ponte MetaTrader 5 (tempo real)</h4>
+                <p className="text-[11px] text-zinc-400 mt-0.5">
+                  MT5 aberto no PC + <code className="text-cyan-300">npm run dev:mt5</code>. URL remota
+                  (VPS/túnel) também suportada.
+                </p>
+              </div>
+            </div>
+
+            <label className="flex items-center gap-2 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={mt5LiveEnabled}
+                onChange={(e) => setMt5LiveEnabled(e.target.checked)}
+                className="rounded border-zinc-600"
+              />
+              <span className="text-sm text-zinc-200">Modo MT5 ao vivo (gráfico direto da ponte)</span>
+            </label>
+
+            <label className="block space-y-1">
+              <span className="text-[11px] font-semibold uppercase text-zinc-500">URL da ponte</span>
+              <input
+                value={mt5BridgeUrl}
+                onChange={(e) => setMt5BridgeUrl(e.target.value)}
+                placeholder="http://127.0.0.1:8765"
+                className="w-full bg-[#09090b] border border-zinc-800 rounded-lg px-3 py-2 text-sm font-mono text-white"
+              />
+            </label>
+
+            <label className="block space-y-1">
+              <span className="text-[11px] font-semibold uppercase text-zinc-500">
+                Chave da ponte (opcional, X-Bridge-Key)
+              </span>
+              <input
+                type="password"
+                value={mt5BridgeKeyInput}
+                onChange={(e) => setMt5BridgeKeyInput(e.target.value)}
+                placeholder="BRIDGE_API_KEY do servidor"
+                className="w-full bg-[#09090b] border border-zinc-800 rounded-lg px-3 py-2 text-sm font-mono text-white"
+              />
+            </label>
+
+            <div className="grid grid-cols-2 gap-3">
+              <label className="block space-y-1">
+                <span className="text-[11px] font-semibold uppercase text-zinc-500">Símbolo</span>
+                <input
+                  value={mt5Symbol}
+                  onChange={(e) => setMt5Symbol(e.target.value.toUpperCase())}
+                  className="w-full bg-[#09090b] border border-zinc-800 rounded-lg px-3 py-2 text-sm font-mono text-white"
+                />
+              </label>
+              <label className="block space-y-1">
+                <span className="text-[11px] font-semibold uppercase text-zinc-500">Timeframe</span>
+                <select
+                  value={mt5Timeframe}
+                  onChange={(e) => setMt5Timeframe(e.target.value)}
+                  className="w-full bg-[#09090b] border border-zinc-800 rounded-lg px-3 py-2 text-sm text-white"
+                >
+                  <option value="M1">M1</option>
+                  <option value="M5">M5</option>
+                  <option value="M15">M15</option>
+                  <option value="M30">M30</option>
+                  <option value="H1">H1</option>
+                </select>
+              </label>
+            </div>
+
+            <label className="flex items-center gap-2 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={mt5AutoAnalyze}
+                onChange={(e) => setMt5AutoAnalyze(e.target.checked)}
+                className="rounded border-zinc-600"
+              />
+              <span className="text-xs text-zinc-300">Auto-analisar com Gemini ao fechar nova vela (mín. 45s)</span>
+            </label>
+
+            <label className="flex items-center gap-2 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={mt5UseStream}
+                onChange={(e) => setMt5UseStream(e.target.checked)}
+                className="rounded border-zinc-600"
+              />
+              <span className="text-xs text-zinc-300">Usar stream SSE (menor delay)</span>
+            </label>
+
+            <p
+              className={`text-[11px] rounded-lg px-3 py-2 border ${
+                mt5Status === "live"
+                  ? "text-emerald-300 bg-emerald-500/10 border-emerald-500/30"
+                  : mt5Status === "error"
+                    ? "text-rose-300 bg-rose-500/10 border-rose-500/30"
+                    : "text-zinc-400 bg-zinc-800/40 border-zinc-700"
+              }`}
+            >
+              {mt5StatusMessage || "Desligado — ative o modo ao vivo e teste a conexão."}
+            </p>
+
+            <div className="flex flex-wrap gap-2">
+              <button
+                type="button"
+                onClick={handleTestMt5Bridge}
+                className="py-2 px-4 rounded-lg text-sm font-bold bg-cyan-600 hover:bg-cyan-500 text-white"
+              >
+                Testar conexão MT5
+              </button>
+              <button
+                type="button"
+                onClick={handleSaveMt5Settings}
+                className="py-2 px-4 rounded-lg text-sm font-bold border border-zinc-600 text-zinc-200 hover:bg-zinc-800"
+              >
+                Salvar ponte MT5
+              </button>
+            </div>
+
+            <p className="text-[10px] text-zinc-500 leading-relaxed">
+              Guia VPS/túnel: <code className="text-zinc-400">mt5-bridge/README.md</code>. Site na Vercel
+              só alcança a ponte se estiver no mesmo PC (localhost) ou se você usar URL HTTPS do túnel.
+            </p>
           </div>
         </div>
       )}
@@ -2760,10 +3157,25 @@ CandleScan FÁCIL • Análise didática com IA — use sempre stop loss.
                   ) : (
                     <>
                       <Compass className="h-4 w-4" />
-                      Traduzir Gráfico
+                      Traduzir Gráfico (print)
                     </>
                   )}
                 </button>
+                {mt5LiveEnabled && (
+                  <button
+                    type="button"
+                    onClick={() => void requestMt5LiveAnalysis()}
+                    disabled={
+                      isAnalyzing ||
+                      mt5Status !== "live" ||
+                      !mt5LiveCandles?.length
+                    }
+                    className="py-3 px-5 rounded-xl font-bold text-sm tracking-wide transition-all flex items-center justify-center gap-2 border-2 border-cyan-500/70 bg-cyan-500/15 text-cyan-100 hover:bg-cyan-500/25 active:scale-95 disabled:opacity-50"
+                  >
+                    <LineChart className="h-4 w-4" />
+                    Analisar mercado (MT5)
+                  </button>
+                )}
               </div>
             </div>
 
@@ -3217,6 +3629,13 @@ CandleScan FÁCIL • Análise didática com IA — use sempre stop loss.
                   Módulo de Força do Preço (Mais Velas de Alta vs Queda)
                 </span>
                 <div className="flex flex-wrap gap-1.5 shrink-0">
+                  {mt5LiveEnabled && mt5Status === "live" && (
+                    <span className="inline-flex items-center gap-1 text-[8px] sm:text-[9px] bg-cyan-950/80 border border-cyan-500/40 px-1.5 py-0.5 rounded-md text-cyan-300 font-bold animate-pulse">
+                      <span className="inline-block w-1.5 h-1.5 rounded-full bg-cyan-400 shrink-0"></span>
+                      Dados ao vivo — MT5
+                      {mt5ResolvedSymbol ? ` · ${mt5ResolvedSymbol}` : ""}
+                    </span>
+                  )}
                   <span className="inline-flex items-center gap-1 text-[8px] sm:text-[9px] bg-emerald-950/60 border border-emerald-500/20 px-1.5 py-0.5 rounded-md text-emerald-400 font-bold">
                     <span className="inline-block w-1.5 h-1.5 rounded-full bg-emerald-400 shrink-0"></span>
                     Vela de Força ({`>`}70%)
@@ -3235,12 +3654,14 @@ CandleScan FÁCIL • Análise didática com IA — use sempre stop loss.
                 {renderDummyGraph()}
               </div>
               <p className="text-[11px] text-[#787b86] leading-normal">
-                *Gráfico reconstruído a partir dos últimos 10 candles do print
-                {activeAnalysis.candleTimeLabels?.length
-                  ? " — horários do eixo X"
-                  : activeAnalysis.syntheticCandles?.length
-                    ? " — OHLC alinhados ao print"
-                    : " — estimativa pela tendência"}.
+                *Gráfico com os últimos 10 candles
+                {mt5LiveEnabled && mt5Status === "live"
+                  ? " — MetaTrader 5 em tempo real"
+                  : activeAnalysis.candleTimeLabels?.length
+                    ? " — horários do eixo X do print"
+                    : activeAnalysis.syntheticCandles?.length
+                      ? " — OHLC do print"
+                      : " — estimativa pela tendência"}.
                 Linhas: <span className="text-amber-400 font-mono">Entrada</span>, <span className="text-[#ef5350] font-mono">Stop</span>, <span className="text-[#26a69a] font-mono">Alvo</span>.
                 Atualize com novo print para avançar a linha do tempo.
               </p>

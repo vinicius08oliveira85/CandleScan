@@ -16,6 +16,11 @@
     "api/health.js": {
       "maxDuration": 10,
       "memory": 256
+    },
+    "api/analyze-live.js": {
+      "maxDuration": 60,
+      "memory": 1024,
+      "includeFiles": "dist/server.cjs"
     }
   }
 }

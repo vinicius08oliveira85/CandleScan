@@ -6,3 +6,5 @@ coverage/
 *.log
 .env*
 !.env.example
+mt5-bridge/.venv/
+mt5-bridge/__pycache__/

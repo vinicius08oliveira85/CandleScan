@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "vite",
     "dev:api": "tsx dev-server.ts",
+    "dev:mt5": "powershell -ExecutionPolicy Bypass -File mt5-bridge/start-bridge.ps1",
     "build": "vite build && esbuild server.ts --bundle --platform=node --format=cjs --sourcemap --outfile=dist/server.cjs",
     "vercel-build": "npm run build",
     "start": "node dist/server.cjs",

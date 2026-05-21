@@ -11,6 +11,12 @@ import {
   MULTI_ANALYSIS_SCHEMA,
 } from './shared/geminiSchemas';
 import { geminiErrorResponseBody } from './shared/geminiErrors';
+import {
+  LIVE_ANALYSIS_SYSTEM_INSTRUCTION,
+  buildLiveAnalysisPrompt,
+  buildCandleTimeLabelsFromMt5,
+  timeframeLabel,
+} from './shared/analyzeLive';
 
 try {
   dotenv.config({ path: '.env.local' });
@@ -81,6 +87,52 @@ app.post('/api/analyze', async (req, res) => {
     return res.json(parsed);
   } catch (err: unknown) {
     console.error('Erro na rota /api/analyze:', err);
+    const { httpStatus, payload } = geminiErrorResponseBody(err);
+    return res.status(httpStatus).json(payload);
+  }
+});
+
+app.post('/api/analyze-live', async (req, res) => {
+  try {
+    const { symbol, timeframe, candles, precoAtual, dadosCompra, apiKey } = req.body;
+    if (!symbol?.trim()) {
+      return res.status(400).json({ error: 'Símbolo MT5 obrigatório.' });
+    }
+    if (!candles || !Array.isArray(candles) || candles.length < 2) {
+      return res.status(400).json({ error: 'Envie pelo menos 2 candles OHLC do MT5.' });
+    }
+
+    const tf = (timeframe || 'M5').trim();
+    const slice = candles.slice(-10);
+    const aiInstance = getGeminiClient(apiKey);
+
+    const promptText = buildLiveAnalysisPrompt(
+      symbol.trim(),
+      tf,
+      slice,
+      precoAtual ?? null,
+      dadosCompra
+    );
+    const parts = buildGeminiParts(promptText, []);
+    const textOutput = await generateGeminiJson(
+      aiInstance,
+      LIVE_ANALYSIS_SYSTEM_INSTRUCTION,
+      parts,
+      CHART_ANALYSIS_SCHEMA
+    );
+
+    const parsed = JSON.parse(textOutput.trim());
+    parsed.syntheticCandles = slice;
+    parsed.candleTimeLabels = buildCandleTimeLabelsFromMt5(slice);
+    parsed.ativoCooptado = symbol.trim();
+    parsed.tempoGrafico = timeframeLabel(tf);
+    parsed.graficoReferenciaEm = new Date().toISOString();
+    if (precoAtual != null && Number.isFinite(precoAtual)) {
+      parsed.precoAtualEstimado = `R$ ${Number(precoAtual).toFixed(2).replace('.', ',')}`;
+    }
+    return res.json(parsed);
+  } catch (err: unknown) {
+    console.error('Erro na rota /api/analyze-live:', err);
     const { httpStatus, payload } = geminiErrorResponseBody(err);
     return res.status(httpStatus).json(payload);
   }
