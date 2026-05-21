@@ -4,7 +4,7 @@ import { GoogleGenAI, Type } from '@google/genai';
 import dotenv from 'dotenv';
 
 dotenv.config({ path: '.env.local' });
-dotenv.config();
+// dotenv.config(); // Removido para evitar reconfiguração desnecessária, .env.local já tem precedência.
 
 const app = express();
 const port = 3000;
@@ -36,6 +36,14 @@ function getGemini(): GoogleGenAI {
 const SYSTEM_INSTRUCTION = `Você é um analista profissional de trading amigável e focado em EXPLICAR DE FORMA SIMPLES para iniciantes e leigos.
 Sua função é analisar imagens (prints de gráficos de velas/candles enviados pelo usuário) e fornecer uma avaliação extremamente clara, prática e didática sobre o momento atual do preço do ativo.
 
+PRIORIDADE MÁXIMA — SEGURANÇA DO VALOR:
+- Proteger o capital do investidor vem antes de buscar lucro agressivo.
+- Sempre defina um stop loss realista e nunca incentive operar sem limite de perda.
+- Se a relação risco/retorno for fraca (ganho menor que o risco), recomende "Aguardar" ou reduzir tamanho da posição.
+- No campo comentarioAnalista, inclua OBRIGATORIAMENTE uma frase curta e direta sobre risco de perda vs ganho, no formato:
+  "Se perder, você perde [valor ou % aproximado]; se ganhar, você ganha [valor ou % aproximado]."
+  Use os preços de entrada, stop e alvo que você mesmo sugeriu para calcular X e Y.
+
 Siga rigorosamente estas diretrizes ao analisar a imagem do gráfico:
 1. Identifique a Direção Principal do Preço (Tendência):
    - Alta (Subindo)
@@ -64,10 +72,30 @@ Siga rigorosamente estas diretrizes ao analisar a imagem do gráfico:
    - Reversão de Forças: Apresente como "Subir ou descer a encosta íngreme exatamente quando o vento muda de lado repentinamente" (o preço cansou de subir e vira ladeira abaixo, ou cansou de cair e decola ladeira acima).
    - Sem Entrada: Apresente como "Pântano de areia movediça sem direção confiável (Melhor não pisar agora)"
    - Ponto ideal de entrada (Qual preço aproximado comprar/vender)
-   - Limite de Segurança (Stop loss): Explique como "O cinto de segurança se der errado, para evitar perdas"
-   - Alvo de Ganho (Take profit): Explique como "A meta de onde colocar o lucro no bolso"
-8. Atribua um Nível de Confiança objetivo (Baixo, Médio ou Alto).
+   - Limite de Segurança (Stop loss): Explique como "O seu ESCUDO DE PROTEÇÃO. Se o preço tocar aqui, saímos para proteger seu dinheiro."
+   - Alvo de Ganho (Take profit): Explique como "O seu TROFÉU DE VITÓRIA. Aqui é onde colocamos o lucro no bolso e encerramos o dia feliz."
+   - Relação Risco/Retorno: Calcule mentalmente se o ganho potencial supera o risco (ex: "1:2,5 — ganho vale o dobro do risco").
+8. Nível de Confiança (nivelConfianca) — OBRIGATÓRIO e baseado na NITIDEZ VISUAL:
+   - Alto: candles, eixo de preços e níveis estão nítidos e legíveis na imagem; padrões são claros.
+   - Médio: imagem aceitável, mas com alguma compressão, zoom ou sobreposição que dificulta leitura fina.
+   - Baixo: print borrado, cortado, muito pequeno ou com elementos que impedem ler velas e preços com segurança.
+   - Nunca atribua "Alto" se a nitidez visual dos candles for duvidosa.
 9. Classifique se há um rompimento de suporte ou resistência e comente sobre o mesmo.
+10. Dados Sintéticos para Visualização (syntheticCandles) — OBRIGATÓRIO:
+   - Identifique os 10 últimos candles visíveis no gráfico, da esquerda para a direita (o último item do array é o candle mais recente).
+   - Extraia valores OHLC numéricos proporcionais ao movimento real: se o eixo de preços estiver legível, use esses valores; caso contrário, construa uma escala relativa coerente preservando amplitude, direção e proporção corpo/pavio de cada vela.
+   - Regras matemáticas: high >= max(open, close); low <= min(open, close); a sequência deve refletir a tendência e o momento identificados.
+   - Não invente velas invisíveis. Retorne exatamente 10 objetos { open, high, low, close }.
+11. Formatação de Preços de Operação (pontoEntrada, stopLoss, alvo) — OBRIGATÓRIO:
+   - Estrutura fixa: VALOR NUMÉRICO PURO primeiro, depois explicação lúdica breve entre parênteses.
+   - Ativos brasileiros (B3): "R$ X,XX (explicação curta)" — ex: "R$ 4,28 (pisar no chão recém-testado)".
+   - Ativos em dólar: "$X.XX (explicação curta)" — ex: "$58,50 (vender no reteste do teto)".
+   - PROIBIDO começar com frases longas; o primeiro caractere legível deve ser R$, $ ou o dígito do preço.
+   - Stop loss: use analogia de escudo/cinto — ex: "R$ 4,22 (seu escudo se o preço despencar)".
+   - Alvo: use analogia de troféu/lucro — ex: "$4,38 (troféu: colocar lucro no bolso)".
+12. Relação Risco/Retorno (relacaoRiscoRetorno) — OBRIGATÓRIO:
+   - Formato curto: "1:X — [viável / equilibrada / fraca]" com base na distância entre entrada, stop e alvo visíveis no gráfico.
+   - Exemplo: "1:2,3 — viável (ganho maior que o risco)" ou "1:0,8 — fraca (risco maior que o ganho)".
 
 ATENÇÃO: Nunca invente dados que não estejam claramente visíveis na tela do gráfico. Use uma comunicação calorosa, empática, parecendo um professor paciente ensinando uma pessoa querida do zero.`;
 
@@ -110,7 +138,7 @@ app.post('/api/analyze', async (req, res) => {
 
     // Call Gemini with schema configuration
     const response = await aiInstance.models.generateContent({
-      model: 'gemini-3.5-flash',
+      model: 'gemini-1.5-flash',
       contents: { parts: contents },
       config: {
         systemInstruction: SYSTEM_INSTRUCTION,
@@ -128,19 +156,33 @@ app.post('/api/analyze', async (req, res) => {
             cenarioProvavel: { type: Type.STRING, description: 'O cenário técnico mais provável de se concretizar a curtíssimo prazo' },
             acaoRecomendada: { type: Type.STRING, description: "Ação sugerida: 'Comprar', 'Vender' ou 'Aguardar'" },
             tipoEntrada: { type: Type.STRING, description: "Tipo recomendado de entrada apresentado em forma de 'tipo de terreno' lúdico no gráfico usando as analogias descritas (ex: 'Entrar em terreno plano depois que o chão rachou' para rompimento de suporte, ou 'Pisar de leve no chão recém-testado' para pullback, ou 'Subir ou descer a encosta íngreme quando o vento de forças vira' para reversão, ou 'Pântano movesco sem direção confiável' para sem entrada)" },
-            pontoEntrada: { type: Type.STRING, description: 'Ponto ideal exato de entrada sugerido' },
-            stopLoss: { type: Type.STRING, description: 'Stop loss sugerido para controle de risco' },
-            alvo: { type: Type.STRING, description: 'Alvo ideal de saída (Take Profit)' },
-            nivelConfianca: { type: Type.STRING, description: 'Nível de confiança da análise técnica: Baixo, Médio ou Alto' },
-            comentarioAnalista: { type: Type.STRING, description: 'Um comentário do mentor direto para o trader sobre armadilhas locais ou gestão de risco' },
+            pontoEntrada: { type: Type.STRING, description: 'Preço de entrada no formato "R$ X,XX" ou "$X.XX" seguido de explicação opcional entre parênteses' },
+            stopLoss: { type: Type.STRING, description: 'Stop loss no formato "R$ X,XX" ou "$X.XX" seguido de explicação opcional entre parênteses' },
+            alvo: { type: Type.STRING, description: 'Take profit no formato "R$ X,XX" ou "$X.XX" seguido de explicação opcional entre parênteses' },
+            nivelConfianca: { type: Type.STRING, description: 'Baixo, Médio ou Alto — baseado principalmente na nitidez visual dos candles e legibilidade dos preços na imagem' },
+            relacaoRiscoRetorno: { type: Type.STRING, description: 'Relação risco/retorno estimada no formato "1:X — viável/equilibrada/fraca" com breve justificativa lúdica' },
+            comentarioAnalista: { type: Type.STRING, description: 'Conselho do mentor priorizando SEGURANÇA DO VALOR. OBRIGATÓRIO incluir: "Se perder, você perde X; se ganhar, você ganha Y" (valores aproximados com base em entrada, stop e alvo)' },
+            syntheticCandles: { 
+              type: Type.ARRAY, 
+              items: {
+                type: Type.OBJECT,
+                properties: {
+                  open: { type: Type.NUMBER },
+                  high: { type: Type.NUMBER },
+                  low: { type: Type.NUMBER },
+                  close: { type: Type.NUMBER }
+                }
+              },
+              description: "Exatamente 10 candles OHLC numericamente proporcionais aos últimos 10 candles visíveis na imagem (ordem cronológica; o último é o mais recente)."
+            },
             rompimentoDetectado: { type: Type.BOOLEAN, description: "Defina como true se o preço rompeu recentemente ou está rompendo um suporte (piso) ou resistência (teto) importante; caso contrário, false" },
             rompimentoComentario: { type: Type.STRING, description: "Breve explicação/comentário sobre a força e direção deste rompimento (ex: 'Rompimento forte de teto sustentado por velas verdes volumosas' ou 'Piso quebrado com muita agressividade'), ou vazio se rompimentoDetectado for false" }
           },
           required: [
             'ativoCooptado', 'tempoGrafico', 'tendencia', 'momento', 'leituraCandles',
             'suporte', 'resistencia', 'cenarioProvavel', 'acaoRecomendada', 
-            'tipoEntrada', 'pontoEntrada', 'stopLoss', 'alvo', 'nivelConfianca', 
-            'comentarioAnalista', 'rompimentoDetectado', 'rompimentoComentario'
+            'tipoEntrada', 'pontoEntrada', 'stopLoss', 'alvo', 'nivelConfianca', 'relacaoRiscoRetorno',
+            'comentarioAnalista', 'rompimentoDetectado', 'rompimentoComentario', 'syntheticCandles'
           ]
         }
       }
@@ -212,7 +254,7 @@ app.post('/api/analyze-multi', async (req, res) => {
     });
 
     const response = await aiInstance.models.generateContent({
-      model: 'gemini-3.5-flash',
+      model: 'gemini-1.5-flash',
       contents: { parts: contents },
       config: {
         systemInstruction: MULTI_SYSTEM_INSTRUCTION,

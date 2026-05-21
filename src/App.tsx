@@ -1,9 +1,11 @@
-import React, { useState, useEffect, useRef } from "react";
+import React, { useState, useEffect, useRef, useCallback } from "react";
+import html2canvas from "html2canvas";
 import { 
   TrendingUp, 
   TrendingDown, 
   ArrowRight, 
-  UploadCloud, 
+  UploadCloud,
+  DownloadCloud,
   History, 
   Plus, 
   X, 
@@ -14,6 +16,10 @@ import {
   HelpCircle, 
   Target, 
   AlertTriangle, 
+  Shield,
+  CircleDot,
+  Trophy,
+  Scale,
   Compass, 
   Sparkles,
   BookOpen,
@@ -22,8 +28,13 @@ import {
   FileText,
   Thermometer
 } from "lucide-react";
-import { ChartAnalysis, MultiChartAnalysis, SavedAnalysis, PresetChart } from "./types";
+import { ChartAnalysis, MultiChartAnalysis, SavedAnalysis, PresetChart, BeforeInstallPromptEvent } from "./types";
 import { PRESET_CHARTS, PRESET_MULTI_CHARTS } from "./data/presets";
+import {
+  loadHistoryFromStorage,
+  persistHistoryToStorage,
+  MAX_HISTORY_WITH_PHOTOS,
+} from "./historyStorage";
 import { motion } from "motion/react";
 
 export default function App() {
@@ -59,6 +70,55 @@ export default function App() {
   const [previewImage, setPreviewImage] = useState<string | null>(null);
   const [copiedField, setCopiedField] = useState<string | null>(null);
 
+  // PWA — instalação no celular
+  const [deferredPrompt, setDeferredPrompt] = useState<BeforeInstallPromptEvent | null>(null);
+  const [isAppInstalled, setIsAppInstalled] = useState(false);
+  const exportReportRef = useRef<HTMLDivElement>(null);
+  const [isExportingImage, setIsExportingImage] = useState(false);
+
+  const checkIsAppInstalled = useCallback(() => {
+    const standalone = window.matchMedia("(display-mode: standalone)").matches;
+    const iosStandalone = (navigator as Navigator & { standalone?: boolean }).standalone === true;
+    return standalone || iosStandalone;
+  }, []);
+
+  useEffect(() => {
+    setIsAppInstalled(checkIsAppInstalled());
+
+    const onBeforeInstall = (e: Event) => {
+      e.preventDefault();
+      setDeferredPrompt(e as BeforeInstallPromptEvent);
+    };
+    const onInstalled = () => {
+      setDeferredPrompt(null);
+      setIsAppInstalled(true);
+    };
+    const mq = window.matchMedia("(display-mode: standalone)");
+    const onDisplayChange = () => setIsAppInstalled(checkIsAppInstalled());
+
+    window.addEventListener("beforeinstallprompt", onBeforeInstall);
+    window.addEventListener("appinstalled", onInstalled);
+    mq.addEventListener("change", onDisplayChange);
+
+    return () => {
+      window.removeEventListener("beforeinstallprompt", onBeforeInstall);
+      window.removeEventListener("appinstalled", onInstalled);
+      mq.removeEventListener("change", onDisplayChange);
+    };
+  }, [checkIsAppInstalled]);
+
+  const handleInstallApp = async () => {
+    if (!deferredPrompt) return;
+    await deferredPrompt.prompt();
+    const { outcome } = await deferredPrompt.userChoice;
+    if (outcome === "accepted") {
+      setDeferredPrompt(null);
+      setIsAppInstalled(true);
+    }
+  };
+
+  const showInstallButton = !isAppInstalled && !!deferredPrompt;
+
   // Success Toast & Visual feedback state
   const [showSuccessToast, setShowSuccessToast] = useState<boolean>(false);
   const [toastMessage, setToastMessage] = useState<string>("");
@@ -74,39 +134,36 @@ export default function App() {
     }
   }, [showSuccessToast]);
 
-  // Load history from localStorage
   useEffect(() => {
-    try {
-      const stored = localStorage.getItem("candlescan_history_v1");
-      if (stored) {
-        setHistory(JSON.parse(stored));
-      }
-    } catch (e) {
-      console.error("Failed to load history from localStorage", e);
-    }
+    setHistory(loadHistoryFromStorage());
   }, []);
 
-  // Save history to localStorage
-  const saveToHistory = (newAnalysis: ChartAnalysis, imageCount: number) => {
+  const saveToHistory = (
+    newAnalysis: ChartAnalysis,
+    photos: { name: string; type: string; base64: string }[]
+  ) => {
     const record: SavedAnalysis = {
       id: crypto.randomUUID ? crypto.randomUUID() : Date.now().toString(),
-      timestamp: new Date().toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" }) + " - " + new Date().toLocaleDateString("pt-BR"),
+      timestamp:
+        new Date().toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" }) +
+        " - " +
+        new Date().toLocaleDateString("pt-BR"),
       ativoCooptado: newAnalysis.ativoCooptado || "Ativo Desconhecido",
       tempoGrafico: newAnalysis.tempoGrafico || "Desconhecido",
       tendencia: newAnalysis.tendencia || "Lateral",
       acaoRecomendada: newAnalysis.acaoRecomendada || "Aguardar",
       nivelConfianca: newAnalysis.nivelConfianca || "Médio",
       analysis: newAnalysis,
-      imageCount
+      imageCount: photos.length,
+      previewImages: photos.map((p) => ({
+        name: p.name,
+        mimeType: p.type,
+        base64: p.base64,
+      })),
     };
 
-    const updated = [record, ...history].slice(0, 50); // Keep last 50
+    const updated = persistHistoryToStorage([record, ...history]);
     setHistory(updated);
-    try {
-      localStorage.setItem("candlescan_history_v1", JSON.stringify(updated));
-    } catch (e) {
-      console.error("Failed to save history to localStorage", e);
-    }
   };
 
   // Helper to handle copies
@@ -203,7 +260,7 @@ export default function App() {
       const data: ChartAnalysis = await res.json();
       setActiveAnalysis(data);
       setSelectedPresetId(""); // Clear active preset flag
-      saveToHistory(data, uploadedPhotos.length);
+      saveToHistory(data, uploadedPhotos);
       
       // Trigger success visual feedback toast
       setToastType("analyze");
@@ -241,24 +298,34 @@ export default function App() {
   const loadHistoryItem = (item: SavedAnalysis) => {
     setActiveAnalysis(item.analysis);
     setSelectedPresetId("");
-    setUploadedPhotos([]);
     setAnalysisError(null);
 
-    // Trigger feedback for restored item
+    if (item.previewImages?.length) {
+      setUploadedPhotos(
+        item.previewImages.map((img, idx) => ({
+          id: `hist-${item.id}-${idx}`,
+          name: img.name,
+          type: img.mimeType,
+          base64: img.base64,
+        }))
+      );
+    } else {
+      setUploadedPhotos([]);
+    }
+
     setToastType("history");
-    setToastMessage(`Análise gravada para o ativo ${item.analysis.ativoCooptado || "Histórico"} restaurada!`);
+    setToastMessage(
+      item.previewImages?.length
+        ? `Análise e ${item.previewImages.length} print(s) restaurados do histórico offline!`
+        : `Análise gravada para o ativo ${item.analysis.ativoCooptado || "Histórico"} restaurada!`
+    );
     setShowSuccessToast(true);
   };
 
   const deleteHistoryItem = (id: string, e: React.MouseEvent) => {
     e.stopPropagation();
-    const updated = history.filter(item => item.id !== id);
+    const updated = persistHistoryToStorage(history.filter((item) => item.id !== id));
     setHistory(updated);
-    try {
-      localStorage.setItem("candlescan_history_v1", JSON.stringify(updated));
-    } catch (err) {
-      console.error(err);
-    }
   };
 
   // Confidence percentage helpers
@@ -267,6 +334,65 @@ export default function App() {
     if (lvl.includes("alto") || lvl.includes("high")) return 90;
     if (lvl.includes("médio") || lvl.includes("medio") || lvl.includes("medium")) return 65;
     return 35;
+  };
+
+  const getConfidenceDetails = (level: string) => {
+    const lvl = level?.toLowerCase() || "";
+    const percent = getConfidencePercentage(level);
+    if (lvl.includes("alto") || lvl.includes("high")) {
+      return {
+        percent,
+        explanation:
+          "Alto: Imagem nítida e candles legíveis — alta segurança na leitura. Siga as recomendações respeitando o stop.",
+        barClass:
+          "bg-gradient-to-r from-[#26a69a] via-[#4dd0b0] to-[#26a69a] shadow-[0_0_20px_rgba(38,166,154,0.9),0_0_40px_rgba(38,166,154,0.35)]",
+        labelColor: "text-[#26a69a]",
+      };
+    }
+    if (lvl.includes("médio") || lvl.includes("medio") || lvl.includes("medium")) {
+      return {
+        percent,
+        explanation:
+          "Médio: Nitidez aceitável, mas confira o gráfico ao vivo antes de aumentar o tamanho da posição.",
+        barClass: "bg-gradient-to-r from-amber-500 to-amber-400 shadow-[0_0_10px_rgba(245,158,11,0.5)]",
+        labelColor: "text-amber-400",
+      };
+    }
+    return {
+      percent,
+      explanation:
+        "Baixo: Print pouco nítido ou difícil de ler — prefira aguardar confirmação ou operar com valor mínimo.",
+      barClass: "bg-gradient-to-r from-[#ef5350] to-[#f87171] shadow-[0_0_8px_rgba(239,83,80,0.45)]",
+      labelColor: "text-[#ef5350]",
+    };
+  };
+
+  const getTradingTicketLabels = (action: string) => {
+    const act = action?.toLowerCase() || "";
+    if (act.includes("vender") || act.includes("sell")) {
+      return {
+        entryTitle: "ONDE VENDER",
+        stopTitle: "SAIR SE DER ERRADO (SEGURANÇA)",
+        targetTitle: "ONDE SAIR COM LUCRO",
+      };
+    }
+    if (act.includes("comprar") || act.includes("buy")) {
+      return {
+        entryTitle: "ONDE COMPRAR",
+        stopTitle: "SAIR SE DER ERRADO (SEGURANÇA)",
+        targetTitle: "ONDE SAIR COM LUCRO",
+      };
+    }
+    return {
+      entryTitle: "ONDE ENTRAR",
+      stopTitle: "SAIR SE DER ERRADO (SEGURANÇA)",
+      targetTitle: "ONDE SAIR COM LUCRO",
+    };
+  };
+
+  const getPriceExplanation = (value: string) => {
+    const match = value?.match(/\(([^)]+)\)/);
+    return match ? match[1] : "";
   };
 
   const getCleanLabel = (val: string) => {
@@ -280,84 +406,449 @@ export default function App() {
     const act = action?.toUpperCase() || "";
     if (act.includes("COMPRAR") || act.includes("BUY")) {
       return {
-        bg: "bg-emerald-500/10 border-emerald-500 text-emerald-400",
-        pill: "bg-emerald-500 text-black",
-        light: "text-emerald-400",
-        glow: "shadow-[0_0_20px_rgba(34,197,94,0.15)]",
-        radar: "bg-emerald-500",
+        bg: "bg-[#26a69a]/15 border-[#26a69a] text-[#26a69a]",
+        pill: "bg-[#26a69a] text-[#131722]",
+        light: "text-[#26a69a]",
+        glow: "shadow-[0_0_32px_rgba(38,166,154,0.35)]",
+        radar: "bg-[#26a69a]",
         label: "COMPRAR"
       };
     }
     if (act.includes("VENDER") || act.includes("SELL")) {
       return {
-        bg: "bg-rose-500/10 border-rose-500 text-rose-400",
-        pill: "bg-rose-500 text-white",
-        light: "text-rose-400",
-        glow: "shadow-[0_0_20px_rgba(239,68,68,0.15)]",
-        radar: "bg-rose-500",
+        bg: "bg-[#ef5350]/15 border-[#ef5350] text-[#ef5350]",
+        pill: "bg-[#ef5350] text-white",
+        light: "text-[#ef5350]",
+        glow: "shadow-[0_0_32px_rgba(239,83,80,0.35)]",
+        radar: "bg-[#ef5350]",
         label: "VENDER"
       };
     }
     return {
-      bg: "bg-amber-500/10 border-amber-500 text-amber-400",
-      pill: "bg-amber-500 text-black",
+      bg: "bg-amber-500/15 border-amber-500 text-amber-400",
+      pill: "bg-amber-500 text-[#131722]",
       light: "text-amber-400",
-      glow: "shadow-[0_0_20px_rgba(245,158,11,0.15)]",
+      glow: "shadow-[0_0_28px_rgba(245,158,11,0.3)]",
       radar: "bg-amber-500",
       label: "AGUARDAR"
     };
   };
 
   const actionCfg = getActionColorDetails(activeAnalysis.acaoRecomendada);
+  const ticketLabels = getTradingTicketLabels(activeAnalysis.acaoRecomendada);
+  const confidenceDetails = getConfidenceDetails(activeAnalysis.nivelConfianca);
 
   // Pre-configured list of background candles to show visually when using presets
-  const renderDummyGraph = (tendenciaRaw: string) => {
-    interface SimulatedCandle {
-      open: number;
-      close: number;
-      high: number;
-      low: number;
-    }
+  interface SimulatedCandle {
+    open: number;
+    close: number;
+    high: number;
+    low: number;
+  }
 
-    const candles: { up: SimulatedCandle[]; down: SimulatedCandle[]; lateral: SimulatedCandle[] } = {
-      up: [
-        { open: 20, close: 32, high: 38, low: 15 },
-        { open: 32, close: 26, high: 36, low: 22 },
-        { open: 26, close: 54, high: 56, low: 23 }, // span: 33, body: 28, ratio: 84% (Bullish strength!)
-        { open: 54, close: 48, high: 58, low: 44 },
-        { open: 48, close: 72, high: 75, low: 45 }, // span: 30, body: 24, ratio: 80% (Bullish strength!)
-        { open: 72, close: 66, high: 76, low: 62 },
-        { open: 66, close: 84, high: 86, low: 64 }, // span: 22, body: 18, ratio: 81.8% (Bullish strength!)
-        { open: 84, close: 80, high: 88, low: 76 }
-      ],
-      down: [
-        { open: 85, close: 72, high: 88, low: 68 },
-        { open: 72, close: 76, high: 80, low: 70 },
-        { open: 76, close: 52, high: 78, low: 48 }, // bearish body ratio: 24/30 = 80% (but bearish)
-        { open: 52, close: 56, high: 62, low: 50 },
-        { open: 56, close: 34, high: 58, low: 30 },
-        { open: 34, close: 38, high: 42, low: 32 },
-        { open: 38, close: 18, high: 40, low: 14 },
-        { open: 18, close: 22, high: 26, low: 15 }
-      ],
-      lateral: [
-        { open: 45, close: 55, high: 60, low: 40 },
-        { open: 55, close: 48, high: 58, low: 44 },
-        { open: 48, close: 66, high: 68, low: 45 }, // span: 23, body: 18, ratio: 78.2% (Bullish strength!)
-        { open: 66, close: 52, high: 70, low: 50 },
-        { open: 52, close: 46, high: 56, low: 42 },
-        { open: 46, close: 62, high: 64, low: 44 }, // span: 20, body: 16, ratio: 80% (Bullish strength!)
-        { open: 62, close: 54, high: 66, low: 50 },
-        { open: 54, close: 50, high: 58, low: 46 }
-      ]
+  // Extrai o primeiro valor numérico de strings como "$4,32" ou "R$ 58,50"
+  const parsePrice = (priceString: string): number | null => {
+    if (!priceString || priceString === "Não identificada") return null;
+    const match = priceString.match(/[\d]+[,.]?\d*/);
+    if (!match) return null;
+    const parsed = parseFloat(match[0].replace(",", "."));
+    return isNaN(parsed) ? null : parsed;
+  };
+
+  const formatDisplayPrice = (value: string) => {
+    if (!value) return "---";
+    const parsed = parsePrice(value);
+    if (parsed === null) return value;
+    const isBrl = /r\$/i.test(value);
+    return isBrl
+      ? `R$ ${parsed.toFixed(2).replace(".", ",")}`
+      : `$${parsed.toFixed(2)}`;
+  };
+
+  const computeRiskReward = (
+    entryStr: string,
+    stopStr: string,
+    targetStr: string,
+    action: string
+  ) => {
+    const entry = parsePrice(entryStr);
+    const stop = parsePrice(stopStr);
+    const target = parsePrice(targetStr);
+    if (entry === null || stop === null || target === null) return null;
+
+    const isSell = action.toLowerCase().includes("vender");
+    const riskAmount = isSell ? Math.abs(stop - entry) : Math.abs(entry - stop);
+    const rewardAmount = isSell ? Math.abs(entry - target) : Math.abs(target - entry);
+    if (riskAmount <= 0) return null;
+
+    const ratio = rewardAmount / riskAmount;
+    let viability: "viável" | "equilibrada" | "fraca" = "equilibrada";
+    if (ratio >= 1.5) viability = "viável";
+    else if (ratio < 1) viability = "fraca";
+
+    return {
+      ratio,
+      riskAmount,
+      rewardAmount,
+      viability,
+      label: `1:${ratio.toFixed(1).replace(".", ",")} — ${viability}`,
+    };
+  };
+
+  const getEffectiveRiskRewardRatio = () => {
+    const computed = computeRiskReward(
+      activeAnalysis.pontoEntrada,
+      activeAnalysis.stopLoss,
+      activeAnalysis.alvo,
+      activeAnalysis.acaoRecomendada
+    );
+    if (computed) return computed.ratio;
+    const match = activeAnalysis.relacaoRiscoRetorno?.match(/1\s*:\s*([\d,]+)/i);
+    if (match) {
+      const parsed = parseFloat(match[1].replace(",", "."));
+      if (!isNaN(parsed)) return parsed;
+    }
+    return null;
+  };
+
+  const getRiskRewardDisplay = () => {
+    if (activeAnalysis.relacaoRiscoRetorno?.trim()) {
+      return activeAnalysis.relacaoRiscoRetorno;
+    }
+    const computed = computeRiskReward(
+      activeAnalysis.pontoEntrada,
+      activeAnalysis.stopLoss,
+      activeAnalysis.alvo,
+      activeAnalysis.acaoRecomendada
+    );
+    return computed?.label ?? "Calcule após definir entrada, stop e alvo";
+  };
+
+  const getOperationViability = () => {
+    const ratio = getEffectiveRiskRewardRatio();
+    const computed = computeRiskReward(
+      activeAnalysis.pontoEntrada,
+      activeAnalysis.stopLoss,
+      activeAnalysis.alvo,
+      activeAnalysis.acaoRecomendada
+    );
+
+    if (ratio !== null && ratio > 2.0) {
+      return {
+        label: "OPERAÇÃO ALTAMENTE VIÁVEL",
+        sublabel: computed
+          ? `Risco ${formatDisplayPrice(activeAnalysis.stopLoss)} → Lucro ${formatDisplayPrice(activeAnalysis.alvo)} (1:${ratio.toFixed(1).replace(".", ",")})`
+          : getRiskRewardDisplay(),
+        className:
+          "bg-[#26a69a]/20 border-2 border-[#26a69a] text-[#7ee8d8] shadow-[0_0_28px_rgba(38,166,154,0.85),0_0_56px_rgba(38,166,154,0.35)]",
+        pulse: true,
+      };
+    }
+    if (ratio !== null && ratio >= 1.5) {
+      return {
+        label: "OPERAÇÃO VIÁVEL",
+        sublabel: getRiskRewardDisplay(),
+        className: "bg-[#26a69a]/15 border border-[#26a69a]/60 text-[#26a69a] shadow-[0_0_16px_rgba(38,166,154,0.5)]",
+        pulse: false,
+      };
+    }
+    if (ratio !== null && ratio < 1) {
+      return {
+        label: "OPERAÇÃO DE RISCO ELEVADO",
+        sublabel: getRiskRewardDisplay(),
+        className: "bg-[#ef5350]/15 border border-[#ef5350]/60 text-[#ef5350] shadow-[0_0_12px_rgba(239,83,80,0.45)]",
+        pulse: false,
+      };
+    }
+    return {
+      label: "VIABILIDADE MODERADA",
+      sublabel: getRiskRewardDisplay(),
+      className: "bg-amber-500/15 border border-amber-500/50 text-amber-300 shadow-[0_0_12px_rgba(245,158,11,0.35)]",
+      pulse: false,
+    };
+  };
+
+  const operationViability = getOperationViability();
+
+  const CANDLE_PATTERN_BADGES: { pattern: RegExp; label: string; className: string; inlineClass: string }[] = [
+    { pattern: /\bmartelo\b/gi, label: "Martelo", className: "bg-amber-500/25 text-amber-200 border-amber-400/60 shadow-[0_0_8px_rgba(245,158,11,0.25)]", inlineClass: "bg-amber-500/20 text-amber-200 border border-amber-400/50 rounded px-1 py-0.5 font-bold" },
+    { pattern: /\bengolfo\b/gi, label: "Engolfo", className: "bg-violet-500/25 text-violet-200 border-violet-400/60 shadow-[0_0_8px_rgba(139,92,246,0.25)]", inlineClass: "bg-violet-500/20 text-violet-200 border border-violet-400/50 rounded px-1 py-0.5 font-bold" },
+    { pattern: /\bdoji\b/gi, label: "Doji", className: "bg-zinc-500/25 text-zinc-200 border-zinc-400/60 shadow-[0_0_8px_rgba(161,161,170,0.2)]", inlineClass: "bg-zinc-500/20 text-zinc-200 border border-zinc-400/50 rounded px-1 py-0.5 font-bold" },
+    { pattern: /\bestrela cadente\b/gi, label: "Estrela Cadente", className: "bg-rose-500/25 text-rose-200 border-rose-400/60 shadow-[0_0_8px_rgba(239,83,80,0.25)]", inlineClass: "bg-rose-500/20 text-rose-200 border border-rose-400/50 rounded px-1 py-0.5 font-bold" },
+    { pattern: /\bpi[aã]o\b/gi, label: "Pião", className: "bg-sky-500/25 text-sky-200 border-sky-400/60 shadow-[0_0_8px_rgba(56,189,248,0.25)]", inlineClass: "bg-sky-500/20 text-sky-200 border border-sky-400/50 rounded px-1 py-0.5 font-bold" },
+    { pattern: /\bspinning top\b/gi, label: "Spinning Top", className: "bg-sky-500/25 text-sky-200 border-sky-400/60", inlineClass: "bg-sky-500/20 text-sky-200 border border-sky-400/50 rounded px-1 py-0.5 font-bold" },
+    { pattern: /\brompimento\b/gi, label: "Rompimento", className: "bg-[#26a69a]/25 text-[#7ee8d8] border-[#26a69a]/60 shadow-[0_0_8px_rgba(38,166,154,0.3)]", inlineClass: "bg-[#26a69a]/20 text-[#7ee8d8] border border-[#26a69a]/50 rounded px-1 py-0.5 font-bold" },
+  ];
+
+  const renderLeituraComBadges = (text: string) => {
+    const detected = CANDLE_PATTERN_BADGES.filter(({ pattern }) => {
+      pattern.lastIndex = 0;
+      return pattern.test(text);
+    });
+
+    const highlightInline = (content: string): React.ReactNode[] => {
+      let nodes: React.ReactNode[] = [content];
+      CANDLE_PATTERN_BADGES.forEach((badge, badgeIdx) => {
+        const next: React.ReactNode[] = [];
+        nodes.forEach((node, nodeIdx) => {
+          if (typeof node !== "string") {
+            next.push(node);
+            return;
+          }
+          const re = new RegExp(badge.pattern.source, "gi");
+          const parts = node.split(re);
+          const matches = node.match(re) ?? [];
+          parts.forEach((part, i) => {
+            if (part) next.push(part);
+            if (matches[i]) {
+              next.push(
+                <span key={`${badge.label}-${badgeIdx}-${nodeIdx}-${i}`} className={badge.inlineClass}>
+                  {matches[i]}
+                </span>
+              );
+            }
+          });
+        });
+        nodes = next;
+      });
+      return nodes;
     };
 
-    const isUpTrend = tendenciaRaw?.includes("Alta") || tendenciaRaw?.includes("up") || tendenciaRaw?.toLowerCase().includes("sub");
-    const isDownTrend = tendenciaRaw?.includes("Baixa") || tendenciaRaw?.includes("down") || tendenciaRaw?.toLowerCase().includes("cai");
-    const activeCandles = candles[isUpTrend ? "up" : isDownTrend ? "down" : "lateral"];
+    return (
+      <div className="space-y-3">
+        {detected.length > 0 && (
+          <div className="flex flex-wrap gap-2">
+            {detected.map(({ label, className }) => (
+              <span
+                key={label}
+                className={`inline-flex items-center px-2.5 py-1 rounded-md text-[10px] font-black uppercase tracking-wider border ${className}`}
+              >
+                {label}
+              </span>
+            ))}
+          </div>
+        )}
+        <p className="text-[15px] text-[#d1d4dc] leading-relaxed font-sans tracking-normal">
+          {highlightInline(text)}
+        </p>
+      </div>
+    );
+  };
+
+  const generateDynamicCandles = (tendencia: string, momento: string): SimulatedCandle[] => {
+    const candles: SimulatedCandle[] = [];
+    const numCandles = 10;
+    let lastClose = 50; // Starting price, normalized for the dummy graph
+
+    const isUpTrend = tendencia?.includes("Alta") || tendencia?.includes("up") || tendencia?.toLowerCase().includes("sub");
+    const isDownTrend = tendencia?.includes("Baixa") || tendencia?.includes("down") || tendencia?.toLowerCase().includes("cai");
+    const isLateral = tendencia?.includes("Lateral") || tendencia?.includes("lado");
+
+    for (let i = 0; i < numCandles; i++) {
+      let open = lastClose;
+      let close, high, low;
+
+      let bodySizeFactor = 1;
+      let wickSizeFactor = 1;
+
+      if (momento.includes("Forte")) {
+        bodySizeFactor = 1.5;
+        wickSizeFactor = 0.5; // Strong candles usually have smaller wicks
+      } else if (momento.includes("cansando") || momento.includes("indeciso") || momento.includes("dúvida")) {
+        bodySizeFactor = 0.5;
+        wickSizeFactor = 1.5; // Indecision means smaller bodies, longer wicks
+      }
+
+      if (isUpTrend) {
+        close = open + (Math.random() * 8 + 2) * bodySizeFactor; // Green candle
+        if (momento.includes("cansando") && i >= numCandles - 2) {
+          close = open + (Math.random() * 3 - 1.5) * bodySizeFactor; // Small body, potential reversal
+        }
+        high = Math.max(open, close) + (Math.random() * 5) * wickSizeFactor;
+        low = Math.min(open, close) - (Math.random() * 3) * wickSizeFactor;
+      } else if (isDownTrend) {
+        close = open - (Math.random() * 8 + 2) * bodySizeFactor; // Red candle
+        if (momento.includes("cansando") && i >= numCandles - 2) {
+          close = open - (Math.random() * 3 - 1.5) * bodySizeFactor; // Small body, potential reversal
+        }
+        high = Math.max(open, close) + (Math.random() * 3) * wickSizeFactor;
+        low = Math.min(open, close) - (Math.random() * 5) * wickSizeFactor;
+      } else { // Lateral
+        close = open + (Math.random() * 6 - 3) * bodySizeFactor; // Small body, mixed direction
+        high = Math.max(open, close) + (Math.random() * 7) * wickSizeFactor;
+        low = Math.min(low, open, close) - (Math.random() * 7) * wickSizeFactor;
+      }
+
+      // Ensure high is always >= open, close, low
+      high = Math.max(high, open, close);
+      // Ensure low is always <= open, close, high
+      low = Math.min(low, open, close);
+
+      candles.push({ open, close, high, low });
+      lastClose = close;
+    }
+    return candles;
+  };
+
+  type TradeLineVariant = "entry" | "stop" | "target";
+
+  const renderTradePriceLine = (
+    y: number | null,
+    variant: TradeLineVariant,
+    priceText: string,
+    shortLabel: string
+  ) => {
+    if (y === null) return null;
+
+    const config = {
+      entry: {
+        line: "border-amber-400 shadow-[0_0_22px_rgba(245,158,11,0.95),0_0_44px_rgba(245,158,11,0.4)]",
+        badge: "bg-[#131722]/95 border-amber-400/70 text-amber-300 shadow-[0_0_18px_rgba(245,158,11,0.65)]",
+        iconBox: "bg-amber-500/25 text-amber-300 ring-1 ring-amber-400/50",
+        Icon: CircleDot,
+        z: 16,
+      },
+      stop: {
+        line: "border-[#ef5350] shadow-[0_0_28px_rgba(239,83,80,1),0_0_56px_rgba(239,83,80,0.55)] drop-shadow-[0_0_12px_rgba(239,83,80,0.9)]",
+        badge: "bg-[#0B0E14]/95 border-[#ef5350]/80 text-[#ef5350] shadow-[0_0_24px_rgba(239,83,80,0.75)]",
+        iconBox: "bg-[#ef5350]/30 text-[#ef5350] ring-2 ring-[#ef5350]/60 shadow-[0_0_12px_rgba(239,83,80,0.8)]",
+        Icon: Shield,
+        z: 17,
+      },
+      target: {
+        line: "border-[#26a69a] shadow-[0_0_28px_rgba(38,166,154,1),0_0_56px_rgba(38,166,154,0.55)] drop-shadow-[0_0_12px_rgba(38,166,154,0.9)]",
+        badge: "bg-[#0B0E14]/95 border-[#26a69a]/80 text-[#26a69a] shadow-[0_0_24px_rgba(38,166,154,0.75)]",
+        iconBox: "bg-[#26a69a]/30 text-[#26a69a] ring-2 ring-[#26a69a]/60 shadow-[0_0_12px_rgba(38,166,154,0.8)]",
+        Icon: Trophy,
+        z: 15,
+      },
+    }[variant];
+
+    const { Icon } = config;
 
     return (
-      <div className="flex items-end gap-3 h-full w-full justify-between pt-6 pb-2 px-1 relative select-none">
+      <motion.div
+        key={`${variant}-${y}`}
+        initial={{ width: 0, opacity: 0 }}
+        animate={{ width: "100%", opacity: 1 }}
+        transition={{ duration: 0.8, ease: "easeOut" }}
+        className={`absolute left-0 right-0 border-t-[3px] pointer-events-none ${config.line}`}
+        style={{ bottom: `${y}%`, zIndex: config.z }}
+      >
+        <motion.span
+          initial={{ scale: 0, x: -10 }}
+          animate={{ scale: 1, x: 0 }}
+          transition={{ type: "spring", delay: 0.3, stiffness: 280, damping: 18 }}
+          className={`absolute right-1 -translate-y-1/2 pl-1.5 pr-2.5 py-1.5 rounded-lg text-[10px] font-mono font-bold whitespace-nowrap flex items-center gap-2 border backdrop-blur-md ${config.badge}`}
+        >
+          <span className={`p-2 rounded-md shrink-0 ${config.iconBox}`}>
+            <Icon className="h-5 w-5 stroke-[2.5px]" />
+          </span>
+          <span>
+            <span className="block text-[8px] uppercase tracking-widest opacity-80">{shortLabel}</span>
+            <span className="tabular-nums">{formatDisplayPrice(priceText)}</span>
+          </span>
+        </motion.span>
+      </motion.div>
+    );
+  };
+
+  const renderPriceLevelLine = (
+    y: number | null,
+    lineClass: string,
+    badgeClass: string,
+    label: string,
+    icon: React.ReactNode,
+    zIndex = 8
+  ) => {
+    if (y === null) return null;
+    return (
+      <motion.div
+        key={`${label}-${y}`}
+        initial={{ width: 0, opacity: 0 }}
+        animate={{ width: "100%", opacity: 1 }}
+        transition={{ duration: 0.8, ease: "easeOut" }}
+        className={`absolute left-0 right-0 border-t border-dashed pointer-events-none ${lineClass}`}
+        style={{ bottom: `${y}%`, zIndex }}
+      >
+        <motion.span
+          initial={{ scale: 0, x: -10 }}
+          animate={{ scale: 1, x: 0 }}
+          transition={{ type: "spring", delay: 0.3, stiffness: 280, damping: 18 }}
+          className={`absolute right-1 -translate-y-1/2 px-2 py-0.5 rounded text-[8px] font-mono border backdrop-blur-sm flex items-center gap-1 ${badgeClass}`}
+        >
+          {icon}
+          {label}
+        </motion.span>
+      </motion.div>
+    );
+  };
+
+  const renderDummyGraph = () => {
+    const tendenciaRaw = activeAnalysis.tendencia;
+    const momentoRaw = activeAnalysis.momento;
+
+    const rawCandles =
+      activeAnalysis.syntheticCandles && activeAnalysis.syntheticCandles.length >= 2
+        ? activeAnalysis.syntheticCandles.slice(-10)
+        : generateDynamicCandles(tendenciaRaw, momentoRaw);
+
+    const priceLevels = [
+      ...rawCandles.flatMap((c) => [c.open, c.close, c.high, c.low]),
+      parsePrice(activeAnalysis.resistencia),
+      parsePrice(activeAnalysis.suporte),
+      parsePrice(activeAnalysis.pontoEntrada),
+      parsePrice(activeAnalysis.stopLoss),
+      parsePrice(activeAnalysis.alvo),
+    ].filter((p): p is number => p !== null);
+
+    const minRawPrice = Math.min(...priceLevels);
+    const maxRawPrice = Math.max(...priceLevels);
+    const rawPriceRange = maxRawPrice - minRawPrice || 1;
+
+    const normalizePrice = (price: number) =>
+      ((price - minRawPrice) / rawPriceRange) * 100;
+
+    const activeCandles = rawCandles.map((c) => ({
+      open: normalizePrice(c.open),
+      close: normalizePrice(c.close),
+      high: normalizePrice(c.high),
+      low: normalizePrice(c.low),
+    }));
+
+    const getRelativeY = (price: number | null) => {
+      if (price === null) return null;
+      return Math.max(0, Math.min(100, normalizePrice(price)));
+    };
+
+    const resistanceY = getRelativeY(parsePrice(activeAnalysis.resistencia));
+    const supportY = getRelativeY(parsePrice(activeAnalysis.suporte));
+    const entryY = getRelativeY(parsePrice(activeAnalysis.pontoEntrada));
+    const stopY = getRelativeY(parsePrice(activeAnalysis.stopLoss));
+    const targetY = getRelativeY(parsePrice(activeAnalysis.alvo));
+
+    const priceLabel = (value: string) => formatDisplayPrice(value);
+
+    return (
+      <div className="flex items-end gap-2 h-full w-full justify-between pt-6 pb-2 px-1 relative select-none">
+        {renderPriceLevelLine(
+          resistanceY,
+          "border-[#ef5350]/35",
+          "bg-[#1e222d]/90 border-[#ef5350]/20 text-[#ef5350]/70",
+          `TETO ${priceLabel(activeAnalysis.resistencia)}`,
+          <TrendingDown className="h-3 w-3 opacity-60" />
+        )}
+        {renderPriceLevelLine(
+          supportY,
+          "border-[#26a69a]/35",
+          "bg-[#1e222d]/90 border-[#26a69a]/20 text-[#26a69a]/70",
+          `PISO ${priceLabel(activeAnalysis.suporte)}`,
+          <TrendingUp className="h-3 w-3 opacity-60" />
+        )}
+        {renderTradePriceLine(targetY, "target", activeAnalysis.alvo, "ALVO")}
+        {renderTradePriceLine(entryY, "entry", activeAnalysis.pontoEntrada, "ENTRADA")}
+        {renderTradePriceLine(stopY, "stop", activeAnalysis.stopLoss, "STOP")}
+
         {activeCandles.map((c, i) => {
           const isUp = c.close >= c.open;
           const range = c.high - c.low;
@@ -402,9 +893,9 @@ export default function App() {
                 className={`w-[2px] absolute rounded-full transition-all duration-300 ${
                   isUp 
                     ? isStrengthBull 
-                      ? "bg-emerald-400 brightness-125" 
-                      : "bg-emerald-600/60" 
-                    : "bg-rose-600/60"
+                      ? "bg-[#26a69a] brightness-125 shadow-[0_0_6px_rgba(38,166,154,0.8)]" 
+                      : "bg-[#26a69a]/70" 
+                    : "bg-[#ef5350]/70"
                 }`}
                 style={{ 
                   bottom: `${bottomWick}%`, 
@@ -417,9 +908,9 @@ export default function App() {
                 className={`w-full max-w-[12px] sm:max-w-[16px] rounded-xs absolute transition-all duration-500 cursor-help ${
                   isUp 
                     ? isStrengthBull
-                      ? "bg-emerald-400 border border-emerald-300 shadow-[0_0_12px_rgba(52,211,153,0.8)] animate-pulse"
-                      : "bg-emerald-500/80 hover:bg-emerald-400 border border-emerald-500/30"
-                    : "bg-rose-500/80 hover:bg-rose-400 border border-rose-500/30"
+                      ? "bg-[#26a69a] border border-[#4dd0b0] shadow-[0_0_12px_rgba(38,166,154,0.85)] animate-pulse"
+                      : "bg-[#26a69a]/85 hover:bg-[#26a69a] border border-[#26a69a]/40"
+                    : "bg-[#ef5350]/85 hover:bg-[#ef5350] border border-[#ef5350]/40"
                 }`}
                 style={{ 
                   bottom: `${bottomBody}%`, 
@@ -447,52 +938,6 @@ export default function App() {
     );
   };
 
-  // Download complete text analysis
-  const handleDownloadAnalysis = () => {
-    const rompimentoText = activeAnalysis.rompimentoDetectado
-      ? `\n==================================================\n⚠️ [ALERTA DE ROMPIMENTO DETECTADO!]\n${activeAnalysis.rompimentoComentario || "O preço cruzou e fechou fora de uma barreira importante."}\n==================================================\n`
-      : "";
-
-    const text = `=== CANDLESCAN PRO: RELATÓRIO DE ANÁLISE TÉCNICA ===
-Gerado em: ${new Date().toLocaleString()}
-Ativo Detectado: ${activeAnalysis.ativoCooptado}
-Tempo Gráfico: ${activeAnalysis.tempoGrafico}
---------------------------------------------------
-TENDÊNCIA: ${activeAnalysis.tendencia}
-MOMENTO DO MERCADO: ${activeAnalysis.momento}
-RECOMENDAÇÃO: ${activeAnalysis.acaoRecomendada.toUpperCase()}
-CONFIANÇA: ${activeAnalysis.nivelConfianca}${rompimentoText}
---------------------------------------------------
-Pontos Importantes:
-- Suporte: ${activeAnalysis.suporte}
-- Resistência: ${activeAnalysis.resistencia}
-
-Leitura dos Candles:
-${activeAnalysis.leituraCandles}
-
-Cenário Provável:
-${activeAnalysis.cenarioProvavel}
-
-Estratégia Sugerida:
-- Tipo de Entrada: ${activeAnalysis.tipoEntrada}
-- Ponto Ideal de Entrada: ${activeAnalysis.pontoEntrada}
-- Stop Loss Sugerido: ${activeAnalysis.stopLoss}
-- Alvo (Take Profit): ${activeAnalysis.alvo}
-
-Comentários do Analista Mentor:
-${activeAnalysis.comentarioAnalista}
---------------------------------------------------
-CandleScan PRO • Inteligência Artificial de Alta Precisão para Traders de Curto Prazo
-`;
-    const blob = new Blob([text], { type: "text/plain;charset=utf-8" });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement("a");
-    link.href = url;
-    link.download = `CANDLESCAN-${activeAnalysis.ativoCooptado || "TRADE"}-${Date.now()}.txt`;
-    link.click();
-    URL.revokeObjectURL(url);
-  };
-
   // Dynamic intensity score (candle and volume force thermometer)
   const getIntensityDetails = (analysis: ChartAnalysis) => {
     const mom = (analysis.momento || "").toLowerCase();
@@ -500,45 +945,74 @@ CandleScan PRO • Inteligência Artificial de Alta Precisão para Traders de Cu
     const recom = (analysis.acaoRecomendada || "").toLowerCase();
     const romp = !!analysis.rompimentoDetectado;
 
-    let score = 55; // default moderate score
+    let score = 55;
     let levelLabel = "Moderada / Equilibrada";
     let statusText = "Equilíbrio de forças";
-    let colorClass = "from-amber-500 to-yellow-400"; // neutral gradients
+    let colorClass = "from-amber-500 to-yellow-400";
     let textColor = "text-amber-400";
-    let rgbGlow = "rgba(245,158,11,0.2)";
+    let rgbGlow = "rgba(245,158,11,0.35)";
+    let neonClass = "shadow-[0_0_24px_rgba(245,158,11,0.45),0_0_48px_rgba(245,158,11,0.15)]";
+    let ledActiveClass = "bg-amber-400 shadow-[0_0_12px_rgba(251,191,36,0.9)]";
+    let isBullish = true;
     let description = "Transação equilibrada de ordens. Não há domínio absoluto de nenhum dos lados nas velas recentes.";
 
     if (romp) {
+      isBullish = !tend.includes("baixa") && !tend.includes("cai") && !recom.includes("vender");
       score = 95;
       levelLabel = "FORÇA MÁXIMA / ROMPIMENTO DETECTADO ⚡";
-      statusText = "Rompendo Provedor de Volume";
-      colorClass = "from-emerald-500 via-teal-400 to-emerald-400";
-      textColor = "text-emerald-400";
-      rgbGlow = "rgba(16,185,129,0.3)";
+      statusText = isBullish ? "Rompendo com Força de Alta" : "Rompendo com Força de Baixa";
+      colorClass = isBullish ? "from-[#26a69a] via-teal-400 to-[#26a69a]" : "from-[#ef5350] via-rose-500 to-[#ef5350]";
+      textColor = isBullish ? "text-[#26a69a]" : "text-[#ef5350]";
+      rgbGlow = isBullish ? "rgba(38,166,154,0.55)" : "rgba(239,83,80,0.55)";
+      neonClass = isBullish
+        ? "shadow-[0_0_32px_rgba(38,166,154,0.85),0_0_64px_rgba(38,166,154,0.35)]"
+        : "shadow-[0_0_32px_rgba(239,83,80,0.85),0_0_64px_rgba(239,83,80,0.35)]";
+      ledActiveClass = isBullish
+        ? "bg-[#26a69a] shadow-[0_0_14px_rgba(38,166,154,1)]"
+        : "bg-[#ef5350] shadow-[0_0_14px_rgba(239,83,80,1)]";
       description = "Pressão colossal rompendo barreiras de preço (teto ou chão)! Há extrema aceleração e alta injeção de volume.";
-    } else if (mom.includes("queda livre") || mom.includes("controle") || mom.includes("esmagou") || mom.includes("nocaute") || tend.includes("forte") || tend.includes("alta") || recom === "comprar" || recom === "vender") {
-      // Direct directional strength
-      const isUp = tend.includes("alta") || tend.includes("sub") || recom === "comprar";
-      score = isUp ? 85 : 80;
-      levelLabel = isUp ? "INTENSIDADE FORTE DE COMPRA 🔥" : "INTENSIDADE FORTE DE VENDA 🛑";
-      statusText = isUp ? "Alta Energia Compradora" : "Alta Energia Vendedora";
-      colorClass = isUp ? "from-emerald-600 to-emerald-400" : "from-rose-600 to-rose-450";
-      textColor = isUp ? "text-emerald-400" : "text-rose-400";
-      rgbGlow = isUp ? "rgba(16,185,129,0.25)" : "rgba(244,63,94,0.25)";
-      description = isUp 
+    } else if (mom.includes("queda livre") || mom.includes("controle") || mom.includes("esmagou") || mom.includes("nocaute") || tend.includes("forte") || tend.includes("alta") || tend.includes("baixa") || recom.includes("comprar") || recom.includes("vender")) {
+      isBullish = tend.includes("alta") || tend.includes("sub") || recom.includes("comprar");
+      score = isBullish ? 85 : 80;
+      levelLabel = isBullish ? "INTENSIDADE FORTE DE COMPRA 🔥" : "INTENSIDADE FORTE DE VENDA 🛑";
+      statusText = isBullish ? "Alta Energia Compradora" : "Alta Energia Vendedora";
+      colorClass = isBullish ? "from-[#26a69a] to-[#4dd0b0]" : "from-[#ef5350] to-[#f87171]";
+      textColor = isBullish ? "text-[#26a69a]" : "text-[#ef5350]";
+      rgbGlow = isBullish ? "rgba(38,166,154,0.5)" : "rgba(239,83,80,0.5)";
+      neonClass = isBullish
+        ? "shadow-[0_0_28px_rgba(38,166,154,0.8),0_0_56px_rgba(38,166,154,0.3)]"
+        : "shadow-[0_0_28px_rgba(239,83,80,0.8),0_0_56px_rgba(239,83,80,0.3)]";
+      ledActiveClass = isBullish
+        ? "bg-[#26a69a] shadow-[0_0_12px_rgba(38,166,154,0.95)]"
+        : "bg-[#ef5350] shadow-[0_0_12px_rgba(239,83,80,0.95)]";
+      description = isBullish
         ? "Excelente fluxo recente com velas verdes encorpadas. A força compradora domina amplamente e tende a sustentar novas altas."
         : "Forte pressão vendedora com velas vermelhas robustas. Vendedores estão agressivos empurrando a cotação ladeira abaixo.";
-    } else if (mom.includes("cansando") || mom.includes("recuo") || mom.includes("retração") || mom.includes("dúvida") || mom.includes("empate") || mom.includes("indecis") || tend.includes("lateral") || recom === "aguardar") {
-      score = 15;
+    } else if (tend.includes("lateral") || recom.includes("aguardar") || mom.includes("indecis") || mom.includes("empate") || mom.includes("dúvida")) {
+      isBullish = false;
+      score = 48;
+      levelLabel = "INTENSIDADE MODERADA / INDECISA ⚖️";
+      statusText = "Mercado Indeciso";
+      colorClass = "from-amber-500 to-yellow-400";
+      textColor = "text-amber-400";
+      rgbGlow = "rgba(245,158,11,0.55)";
+      neonClass = "shadow-[0_0_30px_rgba(245,158,11,0.75),0_0_60px_rgba(245,158,11,0.3)]";
+      ledActiveClass = "bg-amber-400 shadow-[0_0_14px_rgba(251,191,36,1)]";
+      description = "Forças equilibradas ou indecisas. O preço oscila sem dominância clara — ideal observar antes de arriscar.";
+    } else if (mom.includes("cansando") || mom.includes("recuo") || mom.includes("retração")) {
+      isBullish = false;
+      score = 22;
       levelLabel = "INTENSIDADE FRACA / EXAUSTÃO ❄️";
-      statusText = "Dúvida e Baixa Atividade";
-      colorClass = "from-rose-500 to-rose-400";
-      textColor = "text-rose-400";
-      rgbGlow = "rgba(244,63,94,0.25)";
-      description = "Volume muito baixo ou exaustão do movimento recente. As velas perderam corpo (Dojis) ou estão batendo em barreiras intransponíveis.";
+      statusText = "Energia Esgotando";
+      colorClass = "from-[#ef5350] to-[#f87171]";
+      textColor = "text-[#ef5350]";
+      rgbGlow = "rgba(239,83,80,0.5)";
+      neonClass = "shadow-[0_0_28px_rgba(239,83,80,0.8),0_0_56px_rgba(239,83,80,0.3)]";
+      ledActiveClass = "bg-[#ef5350] shadow-[0_0_12px_rgba(239,83,80,0.95)]";
+      description = "Volume baixo ou exaustão do movimento. Velas perderam corpo ou encontraram barreiras fortes.";
     }
 
-    return { score, levelLabel, statusText, colorClass, textColor, rgbGlow, description };
+    return { score, levelLabel, statusText, colorClass, textColor, rgbGlow, neonClass, ledActiveClass, isBullish, description };
   };
 
   // Dynamic classification logic for the user-designed custom candle
@@ -612,6 +1086,88 @@ CandleScan PRO • Inteligência Artificial de Alta Precisão para Traders de Cu
     return { patternName, visualAnalogy, badgeType, badgeColor, description, dynamicEx };
   };
 
+  const buildReportText = () => {
+    const rompimentoText = activeAnalysis.rompimentoDetectado
+      ? `\n==================================================\n⚠️ [ALERTA DE ROMPIMENTO DETECTADO!]\n${activeAnalysis.rompimentoComentario || "O preço cruzou e fechou fora de uma barreira importante."}\n==================================================\n`
+      : "";
+
+    const rr = activeAnalysis.relacaoRiscoRetorno || getRiskRewardDisplay();
+
+    return `=== CANDLESCAN FÁCIL — RELATÓRIO DE ANÁLISE TÉCNICA ===
+Gerado em: ${new Date().toLocaleString("pt-BR")}
+Ativo: ${activeAnalysis.ativoCooptado}
+Tempo Gráfico: ${activeAnalysis.tempoGrafico}
+--------------------------------------------------
+TENDÊNCIA: ${activeAnalysis.tendencia}
+MOMENTO: ${activeAnalysis.momento}
+RECOMENDAÇÃO: ${activeAnalysis.acaoRecomendada.toUpperCase()}
+CONFIANÇA: ${activeAnalysis.nivelConfianca}
+RISCO/RETORNO: ${rr}${rompimentoText}
+--------------------------------------------------
+TICKET DE OPERAÇÃO
+• Entrada: ${activeAnalysis.pontoEntrada}
+• Stop (Segurança): ${activeAnalysis.stopLoss}
+• Alvo (Lucro): ${activeAnalysis.alvo}
+--------------------------------------------------
+Suporte: ${activeAnalysis.suporte}
+Resistência: ${activeAnalysis.resistencia}
+
+Leitura dos Candles:
+${activeAnalysis.leituraCandles}
+
+Cenário Provável:
+${activeAnalysis.cenarioProvavel}
+
+Tipo de Entrada: ${activeAnalysis.tipoEntrada}
+
+Mentor:
+${activeAnalysis.comentarioAnalista}
+--------------------------------------------------
+CandleScan FÁCIL • Análise didática com IA — use sempre stop loss.
+`;
+  };
+
+  const downloadBlob = (blob: Blob, filename: string) => {
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = filename;
+    link.click();
+    URL.revokeObjectURL(url);
+  };
+
+  const handleDownloadAnalysis = () => {
+    const blob = new Blob([buildReportText()], { type: "text/plain;charset=utf-8" });
+    downloadBlob(blob, `CANDLESCAN-${activeAnalysis.ativoCooptado || "TRADE"}-${Date.now()}.txt`);
+  };
+
+  const handleDownloadReportImage = async () => {
+    const el = exportReportRef.current;
+    if (!el) {
+      handleDownloadAnalysis();
+      return;
+    }
+    setIsExportingImage(true);
+    try {
+      const canvas = await html2canvas(el, {
+        backgroundColor: "#09090b",
+        scale: Math.min(2, window.devicePixelRatio || 1.5),
+        useCORS: true,
+        logging: false,
+      });
+      canvas.toBlob((blob) => {
+        if (blob) {
+          downloadBlob(blob, `CANDLESCAN-RELATORIO-${activeAnalysis.ativoCooptado || "TRADE"}-${Date.now()}.png`);
+        }
+      }, "image/png", 0.92);
+    } catch (err) {
+      console.error("Falha ao gerar imagem do relatório:", err);
+      handleDownloadAnalysis();
+    } finally {
+      setIsExportingImage(false);
+    }
+  };
+
   return (
     <div id="root-view" className="min-h-screen bg-[#09090b] text-[#fafafa] font-sans antialiased selection:bg-rose-500/30 selection:text-red-200">
       
@@ -639,6 +1195,18 @@ CandleScan PRO • Inteligência Artificial de Alta Precisão para Traders de Cu
           </div>
 
           <div className="flex flex-wrap items-center gap-2.5 w-full md:w-auto">
+            {showInstallButton && (
+              <button
+                type="button"
+                onClick={handleInstallApp}
+                className="px-3.5 py-1.5 flex items-center gap-1.5 rounded-lg bg-rose-500 hover:bg-rose-600 text-white text-xs font-semibold active:scale-95 transition-all shadow-[0_4px_12px_rgba(239,68,68,0.25)] cursor-pointer"
+                title="Instalar CandleScan na tela inicial do celular"
+              >
+                <DownloadCloud className="h-3.5 w-3.5" />
+                📲 Instalar no Celular
+              </button>
+            )}
+
             <button
               onClick={() => setActiveTab(activeTab === "school" ? "scanner" : "school")}
               className={`px-3.5 py-1.5 flex items-center gap-1.5 rounded-lg text-xs font-semibold active:scale-95 transition-all text-center border cursor-pointer ${
@@ -663,10 +1231,20 @@ CandleScan PRO • Inteligência Artificial de Alta Precisão para Traders de Cu
             <button
               id="download-btn"
               onClick={handleDownloadAnalysis}
-              className="px-3.5 py-1.5 flex items-center gap-1.5 rounded-lg bg-rose-500 hover:bg-rose-600 text-white text-xs font-semibold active:scale-95 transition-all shadow-[0_4px_12px_rgba(239,68,68,0.12)] text-center cursor-pointer"
+              className="px-3.5 py-1.5 flex items-center gap-1.5 rounded-lg bg-[#18181b] border border-[#27272a] hover:border-zinc-600 text-[#fafafa] text-xs font-semibold active:scale-95 transition-all text-center cursor-pointer"
+            >
+              <FileText className="h-3.5 w-3.5" />
+              Relatório .txt
+            </button>
+
+            <button
+              id="download-image-btn"
+              onClick={handleDownloadReportImage}
+              disabled={isExportingImage}
+              className="px-3.5 py-1.5 flex items-center gap-1.5 rounded-lg bg-rose-500 hover:bg-rose-600 disabled:opacity-60 text-white text-xs font-semibold active:scale-95 transition-all shadow-[0_4px_12px_rgba(239,68,68,0.12)] text-center cursor-pointer"
             >
               <Download className="h-3.5 w-3.5" />
-              Salvar em Texto
+              {isExportingImage ? "Gerando..." : "Salvar Imagem"}
             </button>
           </div>
         </div>
@@ -1430,7 +2008,7 @@ CandleScan PRO • Inteligência Artificial de Alta Precisão para Traders de Cu
               </div>
               
               <p className="text-xs text-[#a1a1aa] mb-4">
-                Suas análises concluídas ficam guardadas de forma segura no seu próprio navegador para você consultar quando quiser.
+                Até {MAX_HISTORY_WITH_PHOTOS} análises com prints salvos offline no seu navegador (limpeza automática das mais antigas).
               </p>
 
               {history.length === 0 ? (
@@ -1448,9 +2026,16 @@ CandleScan PRO • Inteligência Artificial de Alta Precisão para Traders de Cu
                       <div
                         key={item.id}
                         onClick={() => loadHistoryItem(item)}
-                        className={`p-3 rounded-xl border bg-[#111112] hover:bg-zinc-900 transition flex items-center justify-between cursor-pointer group border-zinc-800 hover:border-zinc-700`}
+                        className={`p-3 rounded-xl border bg-[#111112] hover:bg-zinc-900 transition flex items-center justify-between gap-2 cursor-pointer group border-zinc-800 hover:border-zinc-700`}
                       >
-                        <div className="space-y-1 max-w-[80%]">
+                        {item.previewImages?.[0]?.base64 && (
+                          <img
+                            src={item.previewImages[0].base64}
+                            alt={`Print ${item.ativoCooptado}`}
+                            className="w-12 h-12 rounded-lg object-cover border border-zinc-700 shrink-0"
+                          />
+                        )}
+                        <div className="space-y-1 flex-1 min-w-0">
                           <div className="flex items-center gap-2">
                             <span className="text-xs font-bold text-white tracking-tight">
                               {item.ativoCooptado}
@@ -1533,65 +2118,120 @@ CandleScan PRO • Inteligência Artificial de Alta Precisão para Traders de Cu
             </div>
           )}
 
-          {/* Rompimento Alert (col-span-12) */}
-          {activeAnalysis.rompimentoDetectado && (() => {
-            const isUpBreakout = activeAnalysis.tendencia?.includes("Alta") || activeAnalysis.tendencia?.includes("up") || activeAnalysis.tendencia?.toLowerCase().includes("sub");
-            const isDownBreakout = activeAnalysis.tendencia?.includes("Baixa") || activeAnalysis.tendencia?.includes("down") || activeAnalysis.tendencia?.toLowerCase().includes("cai");
-            
-            const variant = isUpBreakout 
-              ? {
-                  bg: "bg-emerald-500/10 border-emerald-500/30 text-emerald-400 hover:border-emerald-500/50",
-                  iconBg: "bg-emerald-500/20 text-emerald-400",
-                  badge: "Rompimento do Teto (Resistência)",
-                  badgeBg: "bg-emerald-500/20 text-emerald-300 border-emerald-500/30",
-                  title: "🔥 ALERTA DE ROMPIMENTO: VOLATILIDADE ALTA COMPRADORA!",
-                  icon: <TrendingUp className="h-5 w-5 animate-bounce" />
-                }
-              : isDownBreakout
-              ? {
-                  bg: "bg-rose-500/10 border-rose-500/30 text-rose-400 hover:border-rose-500/50",
-                  iconBg: "bg-rose-500/20 text-rose-400",
-                  badge: "Rompimento do Piso (Suporte)",
-                  badgeBg: "bg-rose-500/20 text-rose-300 border-rose-500/30",
-                  title: "⚠️ ALERTA DE ROMPIMENTO: VOLATILIDADE ALTA VENDEDORA!",
-                  icon: <TrendingDown className="h-5 w-5 animate-bounce" />
-                }
-              : {
-                  bg: "bg-amber-500/10 border-amber-500/30 text-amber-400 hover:border-amber-500/50",
-                  iconBg: "bg-amber-500/20 text-amber-400",
-                  badge: "Tendência Acelerada",
-                  badgeBg: "bg-amber-500/20 text-amber-300 border-amber-500/30",
-                  title: "⚠️ ALERTA DE ROMPIMENTO DETECTADO!",
-                  icon: <Sparkles className="h-5 w-5 animate-pulse" />
-                };
-
-            return (
-              <div 
-                id="breakout-alert-card"
-                className={`card col-span-12 p-5 border-2 rounded-xl flex flex-col md:flex-row gap-4 items-start md:items-center justify-between text-left transition-all duration-300 ${variant.bg}`}
-              >
-                <div className="flex gap-4 items-start">
-                  <div className={`p-3 rounded-xl shrink-0 ${variant.iconBg}`}>
-                    {variant.icon}
-                  </div>
-                  <div>
-                    <h3 className="text-sm font-black tracking-wider uppercase flex items-center gap-2">
-                      {variant.title}
-                    </h3>
-                    <p className="text-xs text-zinc-300 mt-1 leading-relaxed">
-                      {activeAnalysis.rompimentoComentario || "O preço cruzou e fechou fora de uma barreira de preço chave, indicando aceleração dramática e força extrema da nova tendência."}
-                    </p>
-                  </div>
+          {/* Trading Ticket — terminal de decisão (topo) + área exportável */}
+          <motion.div
+            ref={exportReportRef}
+            id="candlescan-export-report"
+            key={`trading-ticket-${activeAnalysis.acaoRecomendada}-${activeAnalysis.pontoEntrada}`}
+            initial={{ opacity: 0, y: 12 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ type: "spring", stiffness: 200, damping: 22 }}
+            className={`md:col-span-12 rounded-xl border-2 overflow-hidden bg-[#131722] ${actionCfg.glow} ${actionCfg.bg}`}
+          >
+            <div className="px-5 py-4 border-b border-[#363a45] bg-[#1e222d]/80 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+              <div className="flex items-center gap-3">
+                <div className={`px-3 py-1 rounded-lg text-[10px] font-black uppercase tracking-widest ${actionCfg.pill}`}>
+                  Ticket de Operação
                 </div>
-                <div className={`text-[10px] font-mono font-extrabold uppercase tracking-widest px-3 py-1.5 rounded-lg border shrink-0 ${variant.badgeBg}`}>
-                  {variant.badge}
-                </div>
+                <motion.span
+                  initial={{ scale: 0.9 }}
+                  animate={{ scale: 1 }}
+                  className={`text-4xl sm:text-5xl font-black tracking-tighter font-sans ${actionCfg.light} drop-shadow-[0_0_20px_currentColor]`}
+                >
+                  {actionCfg.label}
+                </motion.span>
               </div>
-            );
-          })()}
+              <div
+                className={`flex flex-col items-end gap-1 px-4 py-2.5 rounded-lg border text-right ${operationViability.className} ${operationViability.pulse ? "animate-pulse" : ""}`}
+              >
+                <span className="text-[11px] font-black uppercase tracking-widest leading-tight">
+                  Viabilidade da Operação
+                </span>
+                <span className="text-sm sm:text-base font-black uppercase tracking-wide">
+                  {operationViability.label}
+                </span>
+                <span className="text-[10px] font-mono tabular-nums opacity-90">
+                  {operationViability.sublabel}
+                </span>
+              </div>
+            </div>
+
+            <div className="p-4 md:p-5 grid grid-cols-1 md:grid-cols-3 gap-3 md:gap-4">
+              {/* Entrada */}
+              <div className="rounded-xl border-2 border-amber-500/50 bg-[#0d1017] p-4 flex flex-col gap-3 shadow-[0_0_24px_rgba(245,158,11,0.15)] hover:border-amber-400/70 transition-colors">
+                <div className="flex items-center gap-2">
+                  <span className="p-2 rounded-lg bg-amber-500/20 text-amber-400 ring-1 ring-amber-500/40">
+                    <CircleDot className="h-5 w-5 stroke-[2.5px]" />
+                  </span>
+                  <span className="text-[11px] font-black uppercase tracking-wider text-amber-400 leading-tight">
+                    {ticketLabels.entryTitle}
+                  </span>
+                </div>
+                <p className="text-2xl font-mono font-bold text-amber-300 tabular-nums tracking-tight drop-shadow-[0_0_12px_rgba(245,158,11,0.35)]">
+                  {formatDisplayPrice(activeAnalysis.pontoEntrada)}
+                </p>
+                {getPriceExplanation(activeAnalysis.pontoEntrada) && (
+                  <p className="text-[11px] text-[#787b86] leading-snug border-t border-[#363a45] pt-2">
+                    {getPriceExplanation(activeAnalysis.pontoEntrada)}
+                  </p>
+                )}
+              </div>
+
+              {/* Stop */}
+              <div className="rounded-xl border-2 border-[#ef5350]/50 bg-[#0d1017] p-4 flex flex-col gap-3 shadow-[0_0_24px_rgba(239,83,80,0.15)] hover:border-[#ef5350]/70 transition-colors">
+                <div className="flex items-center gap-2">
+                  <span className="p-2 rounded-lg bg-[#ef5350]/20 text-[#ef5350] ring-1 ring-[#ef5350]/40">
+                    <Shield className="h-5 w-5 stroke-[2.5px]" />
+                  </span>
+                  <span className="text-[11px] font-black uppercase tracking-wider text-[#ef5350] leading-tight">
+                    {ticketLabels.stopTitle}
+                  </span>
+                </div>
+                <p className="text-2xl font-mono font-bold text-[#ef5350] tabular-nums tracking-tight drop-shadow-[0_0_12px_rgba(239,83,80,0.4)]">
+                  {formatDisplayPrice(activeAnalysis.stopLoss)}
+                </p>
+                {getPriceExplanation(activeAnalysis.stopLoss) && (
+                  <p className="text-[11px] text-[#787b86] leading-snug border-t border-[#363a45] pt-2">
+                    {getPriceExplanation(activeAnalysis.stopLoss)}
+                  </p>
+                )}
+              </div>
+
+              {/* Alvo */}
+              <div className="rounded-xl border-2 border-[#26a69a]/50 bg-[#0d1017] p-4 flex flex-col gap-3 shadow-[0_0_24px_rgba(38,166,154,0.15)] hover:border-[#26a69a]/70 transition-colors">
+                <div className="flex items-center gap-2">
+                  <span className="p-2 rounded-lg bg-[#26a69a]/20 text-[#26a69a] ring-1 ring-[#26a69a]/40">
+                    <Trophy className="h-5 w-5 stroke-[2.5px]" />
+                  </span>
+                  <span className="text-[11px] font-black uppercase tracking-wider text-[#26a69a] leading-tight">
+                    {ticketLabels.targetTitle}
+                  </span>
+                </div>
+                <p className="text-2xl font-mono font-bold text-[#26a69a] tabular-nums tracking-tight drop-shadow-[0_0_12px_rgba(38,166,154,0.4)]">
+                  {formatDisplayPrice(activeAnalysis.alvo)}
+                </p>
+                {getPriceExplanation(activeAnalysis.alvo) && (
+                  <p className="text-[11px] text-[#787b86] leading-snug border-t border-[#363a45] pt-2">
+                    {getPriceExplanation(activeAnalysis.alvo)}
+                  </p>
+                )}
+              </div>
+            </div>
+
+            <div className="px-5 py-3 border-t border-[#363a45] bg-[#0d1017]/60 flex flex-wrap items-center justify-between gap-2 text-[10px] text-[#787b86]">
+              <span>
+                <strong className="text-[#d1d4dc]">{activeAnalysis.ativoCooptado}</strong>
+                {" · "}
+                {activeAnalysis.tempoGrafico}
+              </span>
+              <span className="font-mono">
+                Confiança: <strong className={confidenceDetails.labelColor}>{activeAnalysis.nivelConfianca}</strong>
+              </span>
+            </div>
+          </motion.div>
           
-          {/* Bento Cell 1: Asset Information and Simulated Graph Representation (grid-col: span 8, row: span 3) */}
-          <div className="card md:col-span-8 p-5 bg-[#18181b] border border-[#27272a] rounded-xl flex flex-col justify-between focus-within:ring-1 focus-within:ring-rose-500 transition-all">
+          {/* Gráfico técnico — topo (logo após o ticket) */}
+          <div className="card md:col-span-12 p-5 bg-[#131722] border border-[#363a45] rounded-xl flex flex-col justify-between focus-within:ring-1 focus-within:ring-rose-500 transition-all">
             
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 mb-3">
               <div>
@@ -1643,62 +2283,23 @@ CandleScan PRO • Inteligência Artificial de Alta Precisão para Traders de Cu
               </div>
               
               {/* Dynamic visual graph mock */}
-              <div id="price-levels-guide-graph" className="h-28 bg-gradient-to-t from-zinc-950 to-zinc-900/60 border border-zinc-800/80 rounded-lg p-3 relative overflow-hidden group/graph select-none">
-                {/* Horizontal guidlines mapping for price boundaries */}
-                {activeAnalysis.resistencia !== "Não identificada" && activeAnalysis.resistencia && (
-                  <motion.div 
-                    key={`res-line-${activeAnalysis.resistencia}`}
-                    initial={{ width: 0, opacity: 0 }}
-                    animate={{ width: "100%", opacity: 1 }}
-                    transition={{ duration: 0.8, ease: "easeOut" }}
-                    className="absolute left-0 right-0 top-[25%] border-t border-dashed border-rose-500/40 pointer-events-none z-10 transition-colors"
-                  >
-                    <motion.span 
-                      initial={{ scale: 0, x: -10 }}
-                      animate={{ scale: 1, x: 0 }}
-                      transition={{ type: "spring", delay: 0.3, stiffness: 280, damping: 18 }}
-                      className="absolute left-2 -translate-y-1/2 bg-rose-950/80 border border-rose-500/30 text-rose-300 px-2 py-0.5 rounded-md text-[8px] font-mono whitespace-nowrap tracking-wider flex items-center gap-1 shadow-lg backdrop-blur-xs select-none pointer-events-auto"
-                    >
-                      <span className="w-1.5 h-1.5 rounded-full bg-rose-500 inline-block animate-pulse"></span>
-                      RESISTÊNCIA (TETO): {getCleanLabel(activeAnalysis.resistencia)}
-                    </motion.span>
-                  </motion.div>
-                )}
-
-                {activeAnalysis.suporte !== "Não identificado" && activeAnalysis.suporte && (
-                  <motion.div 
-                    key={`sup-line-${activeAnalysis.suporte}`}
-                    initial={{ width: 0, opacity: 0 }}
-                    animate={{ width: "100%", opacity: 1 }}
-                    transition={{ duration: 0.8, ease: "easeOut" }}
-                    className="absolute left-0 right-0 bottom-[28%] border-t border-dashed border-emerald-500/40 pointer-events-none z-10 transition-colors"
-                  >
-                    <motion.span 
-                      initial={{ scale: 0, x: -10 }}
-                      animate={{ scale: 1, x: 0 }}
-                      transition={{ type: "spring", delay: 0.3, stiffness: 280, damping: 18 }}
-                      className="absolute left-2 -translate-y-1/2 bg-emerald-950/80 border border-emerald-500/30 text-emerald-300 px-2 py-0.5 rounded-md text-[8px] font-mono whitespace-nowrap tracking-wider flex items-center gap-1 shadow-lg backdrop-blur-xs select-none pointer-events-auto"
-                    >
-                      <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 inline-block animate-pulse"></span>
-                      SUPORTE (PISO): {getCleanLabel(activeAnalysis.suporte)}
-                    </motion.span>
-                  </motion.div>
-                )}
-
+              <div id="price-levels-guide-graph" className="h-40 sm:h-44 bg-[#0B0E14] border border-[#363a45] rounded-lg p-3 relative overflow-hidden group/graph select-none shadow-inner shadow-black/40">
                 <div className="absolute top-2 right-2 flex items-center gap-1.5 select-none z-20">
                   <div className="flex items-center gap-1 text-[9px] bg-emerald-950/60 border border-emerald-500/20 px-1.5 py-0.5 rounded-md text-emerald-400 font-bold">
                     <span className="inline-block w-1.5 h-1.5 rounded-full bg-emerald-400 shadow-[0_0_8px_rgba(52,211,153,0.9)] animate-pulse"></span>
                     ⚡ Vela de Força ({`>`}70% Corpo)
                   </div>
-                  <div className="flex items-center gap-1 text-[9px] bg-black/60 border border-zinc-800 px-1.5 py-0.5 rounded-md text-zinc-400">
+                  <div className="flex items-center gap-1 text-[9px] bg-black/60 border border-zinc-800 px-1.5 py-0.5 rounded-md text-zinc-400" title="As velas verdes indicam força compradora, as vermelhas indicam força vendedora.">
                     <span className="inline-block w-1.5 h-1.5 rounded-full bg-emerald-500 animate-ping"></span>
                     Força Recente
                   </div>
                 </div>
-                {renderDummyGraph(activeAnalysis.tendencia)}
+                {renderDummyGraph()}
               </div>
-              <p className="text-[11px] text-[#a1a1aa] leading-normal">
-                *O gráfico acima mostra se o mercado está ganhando ou perdendo força recente. Quando a direção é de <strong>{activeAnalysis.tendencia}</strong>, fique sempre atento às barras de indecisão!
+              <p className="text-[11px] text-[#787b86] leading-normal">
+                *Gráfico reconstruído a partir dos últimos 10 candles detectados pela IA
+                {activeAnalysis.syntheticCandles?.length ? " (dados reais do print)" : " (fallback estimado)"}.
+                Linhas: <span className="text-amber-400 font-mono">Entrada</span>, <span className="text-[#ef5350] font-mono">Stop</span>, <span className="text-[#26a69a] font-mono">Alvo</span>.
               </p>
             </div>
 
@@ -1706,15 +2307,18 @@ CandleScan PRO • Inteligência Artificial de Alta Precisão para Traders de Cu
             {(() => {
               const intensity = getIntensityDetails(activeAnalysis);
               return (
-                <div className="border-t border-zinc-800/60 pt-4 mt-3 space-y-3">
+                <div
+                  className={`border-t border-[#363a45] pt-4 mt-3 space-y-3 rounded-lg transition-shadow duration-500 ${intensity.neonClass}`}
+                  style={{ background: `radial-gradient(ellipse at left, ${intensity.rgbGlow} 0%, transparent 65%)` }}
+                >
                   <div className="flex items-center justify-between">
                     <div className="flex items-center gap-1.5 font-sans">
                       <span className="text-xs">🌡️</span>
-                      <span className="text-[10px] font-extrabold text-zinc-400 uppercase tracking-widest leading-none">
+                      <span className="text-[10px] font-extrabold text-[#787b86] uppercase tracking-widest leading-none">
                         Termômetro de Energia de Vela & Volume
                       </span>
                     </div>
-                    <span className={`text-[10px] uppercase font-mono font-black ${intensity.textColor}`}>
+                    <span className={`text-[10px] uppercase font-mono font-black ${intensity.textColor} drop-shadow-[0_0_8px_currentColor]`}>
                       {intensity.statusText}
                     </span>
                   </div>
@@ -1723,35 +2327,25 @@ CandleScan PRO • Inteligência Artificial de Alta Precisão para Traders de Cu
                     {/* Visual intensity meter */}
                     <div className="md:col-span-5 space-y-1">
                       <div className="flex items-center gap-2">
-                        {/* Thermometer Icon container */}
-                        <div className="relative flex flex-col items-center justify-center p-1 bg-zinc-950 rounded-lg border border-zinc-850 h-9 w-9 shrink-0">
-                          <Thermometer className={`h-5 w-5 ${intensity.textColor} transition-all`} />
+                        <div className={`relative flex flex-col items-center justify-center p-1 bg-[#0d1017] rounded-lg border border-[#363a45] h-10 w-10 shrink-0 ${intensity.neonClass}`}>
+                          <Thermometer className={`h-5 w-5 ${intensity.textColor} transition-all drop-shadow-[0_0_6px_currentColor]`} />
                         </div>
 
-                        {/* Interactive Segmented LED Bar */}
                         <div className="w-full space-y-1">
-                          <div className="flex items-center justify-between text-[8px] text-zinc-500 font-mono leading-none">
-                            <span>FRACA</span>
-                            <span>MODERADA</span>
-                            <span>FORTE</span>
+                          <div className="flex items-center justify-between text-[8px] text-[#787b86] font-mono leading-none">
+                            <span className={intensity.score < 35 ? "text-[#ef5350] drop-shadow-[0_0_6px_rgba(239,83,80,0.8)]" : ""}>FRACA</span>
+                            <span className={intensity.score >= 35 && intensity.score < 70 ? "text-amber-400 drop-shadow-[0_0_6px_rgba(245,158,11,0.8)]" : ""}>MODERADA</span>
+                            <span className={intensity.score >= 70 && intensity.isBullish ? "text-[#26a69a] drop-shadow-[0_0_6px_rgba(38,166,154,0.8)]" : intensity.score >= 70 ? "text-[#ef5350] drop-shadow-[0_0_6px_rgba(239,83,80,0.8)]" : ""}>FORTE</span>
                           </div>
                           
-                          <div className="flex gap-0.5 h-3 items-center w-full">
+                          <div className="flex gap-0.5 h-3.5 items-center w-full">
                             {Array.from({ length: 14 }).map((_, i) => {
                               const tickThreshold = ((i + 1) / 14) * 100;
                               const isActive = intensity.score >= tickThreshold;
                               
-                              let activeBg = "bg-zinc-850";
+                              let activeBg = "bg-[#2a2e39]/80";
                               if (isActive) {
-                                if (intensity.score >= 70) {
-                                  activeBg = "bg-emerald-400 shadow-[0_0_8px_rgba(52,211,153,0.8)]";
-                                } else if (intensity.score >= 40) {
-                                  activeBg = "bg-amber-400 shadow-[0_0_8px_rgba(251,191,36,0.6)]";
-                                } else {
-                                  activeBg = "bg-rose-500 shadow-[0_0_8px_rgba(244,63,94,0.8)]";
-                                }
-                              } else {
-                                activeBg = "bg-zinc-900/60"; // Off-LED color
+                                activeBg = intensity.ledActiveClass;
                               }
 
                               return (
@@ -1766,8 +2360,7 @@ CandleScan PRO • Inteligência Artificial de Alta Precisão para Traders de Cu
                       </div>
                     </div>
 
-                    {/* Description Analysis details */}
-                    <div className="md:col-span-7 bg-zinc-950/60 border border-zinc-900 px-3 py-2 rounded-lg text-[11px] leading-relaxed">
+                    <div className="md:col-span-7 bg-[#0d1017]/80 border border-[#363a45] px-3 py-2 rounded-lg text-[11px] leading-relaxed">
                       <span className={`font-extrabold block text-[10px] uppercase tracking-wide mb-0.5 ${intensity.textColor}`}>
                         {intensity.levelLabel} ({intensity.score}% de Força)
                       </span>
@@ -1783,58 +2376,17 @@ CandleScan PRO • Inteligência Artificial de Alta Precisão para Traders de Cu
 
           </div>
 
-          {/* Bento Cell 2: Recommendation Box (grid-col: span 4, row: span 2) */}
-          <motion.div 
-            key={`rec-box-${activeAnalysis.acaoRecomendada}`}
-            initial={{ opacity: 0, scale: 0.96, y: 15 }}
-            animate={{ opacity: 1, scale: 1, y: 0 }}
-            whileHover={{ scale: 1.015, boxShadow: "0px 10px 30px rgba(0,0,0,0.4)" }}
-            transition={{ type: "spring", stiffness: 220, damping: 18 }}
-            className={`card md:col-span-4 p-5 rounded-xl border flex flex-col justify-between transition-all ${actionCfg.bg} ${actionCfg.glow} border-2`}
-          >
-            <div>
-              <div className="flex items-center justify-between mb-2">
-                <span className="card-title text-[10px] font-bold uppercase tracking-wider block opacity-85">
-                  Recomendação Prática de Ação
-                </span>
-                <span className="relative flex h-2 w-2">
-                  <span className={`animate-ping absolute inline-flex h-full w-full rounded-full opacity-75 ${actionCfg.radar}`}></span>
-                  <span className={`relative inline-flex rounded-full h-2 w-2 ${actionCfg.radar}`}></span>
-                </span>
-              </div>
-              
-              <motion.div 
-                initial={{ scale: 0.85, opacity: 0 }}
-                animate={{ scale: 1, opacity: 1 }}
-                transition={{ type: "spring", stiffness: 260, damping: 15, delay: 0.1 }}
-                className="text-4xl md:text-5xl font-black tracking-tight font-sans leading-none my-3"
-              >
-                {actionCfg.label}
-              </motion.div>
-            </div>
-
-            <div className="space-y-2">
-              <div className="text-xs font-semibold opacity-90">
-                O que fazer agora de forma simples:
-              </div>
-              <p className="text-xs opacity-90 leading-relaxed bg-black/30 p-2.5 rounded-lg border border-white/5">
-                No momento, o estado de força é de <strong className="underline decoration-dotted">{activeAnalysis.momento || "Dúvida"}</strong>. 
-                Use sempre o Limite de Segurança automático para proteger seu dinheiro.
-              </p>
-            </div>
-          </motion.div>
-
-          {/* Bento Cell 3: Confidence Score & Verification Gauge (grid-col: span 4, row: span 2) */}
+          {/* Bento Cell 2: Confidence Score & Verification Gauge (grid-col: span 4, row: span 2) */}
           <motion.div 
             key={`confidence-cell-${activeAnalysis.nivelConfianca}`}
             initial={{ opacity: 0, scale: 0.96, y: 15 }}
             animate={{ opacity: 1, scale: 1, y: 0 }}
             whileHover={{ scale: 1.015 }}
             transition={{ type: "spring", stiffness: 220, damping: 18, delay: 0.04 }}
-            className="card md:col-span-4 p-5 bg-[#18181b] border border-[#27272a] rounded-xl flex flex-col justify-between transition-all hover:border-zinc-700 hover:shadow-lg"
+            className="card md:col-span-4 p-5 bg-[#131722] border border-[#363a45] rounded-xl flex flex-col justify-between transition-all hover:border-[#4a4f5c] hover:shadow-lg"
           >
             <div>
-              <span className="card-title text-xs font-semibold uppercase tracking-wider text-[#a1a1aa] block mb-2">
+              <span className="card-title text-xs font-semibold uppercase tracking-wider text-[#787b86] block mb-2">
                 Segurança do Conselho (IA)
               </span>
               <div className="flex items-baseline gap-1.5">
@@ -1842,28 +2394,30 @@ CandleScan PRO • Inteligência Artificial de Alta Precisão para Traders de Cu
                   initial={{ opacity: 0, y: -5 }}
                   animate={{ opacity: 1, y: 0 }}
                   transition={{ delay: 0.15 }}
-                  className="text-3xl font-black text-white"
+                  className={`text-3xl font-black ${confidenceDetails.labelColor}`}
                 >
                   {activeAnalysis.nivelConfianca || "Médio"}
                 </motion.span>
-                <span className="text-xs text-zinc-500">
-                  ({getConfidencePercentage(activeAnalysis.nivelConfianca)}% de certeza)
+                <span className="text-xs text-[#787b86] font-mono tabular-nums">
+                  ({confidenceDetails.percent}% de certeza)
                 </span>
               </div>
             </div>
 
             <div>
-              {/* Confidence Meter Style widget */}
-              <div className="confidence-meter w-full bg-zinc-800 h-2 rounded-full overflow-hidden relative mt-2 mb-4">
+              <div className="confidence-meter w-full bg-[#2a2e39] h-2.5 rounded-full overflow-hidden relative mt-2 mb-3">
                 <motion.div 
                   initial={{ width: 0 }}
-                  animate={{ width: `${getConfidencePercentage(activeAnalysis.nivelConfianca)}%` }}
+                  animate={{ width: `${confidenceDetails.percent}%` }}
                   transition={{ duration: 1.2, ease: "easeOut", delay: 0.2 }}
-                  className="confidence-bar absolute left-0 top-0 h-full bg-gradient-to-r from-rose-500 to-rose-400 rounded-full"
-                ></motion.div>
+                  className={`confidence-bar absolute left-0 top-0 h-full rounded-full ${confidenceDetails.barClass}`}
+                />
               </div>
-              <p className="text-xs text-[#a1a1aa] leading-normal font-sans">
-                Indica o quanto a nossa Inteligência Artificial está convicta dessa análise baseado nas estatísticas das imagens.
+              <p className={`text-xs leading-normal font-sans mb-2 ${confidenceDetails.labelColor} font-semibold`}>
+                {confidenceDetails.explanation}
+              </p>
+              <p className="text-[10px] text-[#787b86] leading-normal font-sans">
+                Baseado na nitidez visual dos candles e na legibilidade dos preços na imagem enviada.
               </p>
             </div>
           </motion.div>
@@ -1875,10 +2429,10 @@ CandleScan PRO • Inteligência Artificial de Alta Precisão para Traders de Cu
             animate={{ opacity: 1, scale: 1, y: 0 }}
             whileHover={{ scale: 1.015 }}
             transition={{ type: "spring", stiffness: 220, damping: 18, delay: 0.08 }}
-            className="card md:col-span-4 p-5 bg-[#18181b] border border-[#27272a] rounded-xl flex flex-col justify-between transition-all hover:border-zinc-700 hover:shadow-lg"
+            className="card md:col-span-4 p-5 bg-[#131722] border border-[#363a45] rounded-xl flex flex-col justify-between transition-all hover:border-[#4a4f5c] hover:shadow-lg"
           >
             <div className="space-y-1">
-              <span className="card-title text-xs font-semibold uppercase tracking-wider text-[#a1a1aa] block mb-1">
+              <span className="card-title text-xs font-semibold uppercase tracking-wider text-[#787b86] block mb-1">
                 Planejamento da Operação Simplificado
               </span>
               <motion.div 
@@ -1900,8 +2454,8 @@ CandleScan PRO • Inteligência Artificial de Alta Precisão para Traders de Cu
                 className="bg-[#111112] border border-zinc-800 p-2.5 rounded-lg text-left group hover:border-[#27272a] relative"
               >
                 <span className="text-[10px] text-[#a1a1aa] uppercase font-semibold block mb-0.5">Preço recomendado</span>
-                <div className="text-xs font-mono text-amber-400 font-bold tracking-tight">
-                  {activeAnalysis.pontoEntrada || "---"}
+                <div className="text-sm font-mono text-amber-400 font-bold tracking-tight tabular-nums">
+                  {formatDisplayPrice(activeAnalysis.pontoEntrada)}
                 </div>
                 <button 
                   onClick={() => triggerCopy(activeAnalysis.pontoEntrada, "pontoEntrada")}
@@ -1919,8 +2473,8 @@ CandleScan PRO • Inteligência Artificial de Alta Precisão para Traders de Cu
                 className="bg-[#111112] border border-zinc-800 p-2.5 rounded-lg text-left group hover:border-red-900/30 relative"
               >
                 <span className="text-[10px] text-rose-400 uppercase font-semibold block mb-0.5">Cinto de segurança</span>
-                <div className="text-xs font-mono text-rose-500 font-bold tracking-tight">
-                  {activeAnalysis.stopLoss || "---"}
+                <div className="text-sm font-mono text-[#ef5350] font-bold tracking-tight tabular-nums">
+                  {formatDisplayPrice(activeAnalysis.stopLoss)}
                 </div>
                 <button 
                   onClick={() => triggerCopy(activeAnalysis.stopLoss, "stopLoss")}
@@ -1939,8 +2493,8 @@ CandleScan PRO • Inteligência Artificial de Alta Precisão para Traders de Cu
               >
                 <div>
                   <span className="text-[10px] text-emerald-400 uppercase font-semibold block mb-0.5">Meta para colocar Lucro no Bolso</span>
-                  <div className="text-xs font-mono text-emerald-400 font-bold tracking-tight">
-                    {activeAnalysis.alvo || "---"}
+                  <div className="text-sm font-mono text-[#26a69a] font-bold tracking-tight tabular-nums">
+                    {formatDisplayPrice(activeAnalysis.alvo)}
                   </div>
                 </div>
                 <button 
@@ -1962,10 +2516,10 @@ CandleScan PRO • Inteligência Artificial de Alta Precisão para Traders de Cu
             animate={{ opacity: 1, scale: 1, y: 0 }}
             whileHover={{ scale: 1.015 }}
             transition={{ type: "spring", stiffness: 220, damping: 18, delay: 0.12 }}
-            className="card md:col-span-4 p-5 bg-[#18181b] border border-[#27272a] rounded-xl flex flex-col justify-between transition-all hover:border-zinc-700 hover:shadow-lg"
+            className="card md:col-span-4 p-5 bg-[#131722] border border-[#363a45] rounded-xl flex flex-col justify-between transition-all hover:border-[#4a4f5c] hover:shadow-lg"
           >
             <div>
-              <span className="card-title text-xs font-semibold uppercase tracking-wider text-[#a1a1aa] block mb-2">
+              <span className="card-title text-xs font-semibold uppercase tracking-wider text-[#787b86] block mb-2">
                 Piso e Teto Protetores do Preço
               </span>
               
@@ -1978,7 +2532,7 @@ CandleScan PRO • Inteligência Artificial de Alta Precisão para Traders de Cu
                 >
                   <div>
                     <span className="text-[10px] text-[#a1a1aa] block uppercase font-semibold">Teto Caro (Resistência)</span>
-                    <span className="text-white font-mono text-xs font-bold leading-none mt-1 inline-block">
+                    <span className="text-[#d1d4dc] font-mono text-sm font-bold leading-none mt-1 inline-block tabular-nums">
                       {activeAnalysis.resistencia || "Não identificada"}
                     </span>
                   </div>
@@ -1999,7 +2553,7 @@ CandleScan PRO • Inteligência Artificial de Alta Precisão para Traders de Cu
                 >
                   <div>
                     <span className="text-[10px] text-[#a1a1aa] block uppercase font-semibold">Piso Barato (Suporte)</span>
-                    <span className="text-white font-mono text-xs font-bold leading-none mt-1 inline-block">
+                    <span className="text-[#d1d4dc] font-mono text-sm font-bold leading-none mt-1 inline-block tabular-nums">
                       {activeAnalysis.suporte || "Não identificado"}
                     </span>
                   </div>
@@ -2020,7 +2574,7 @@ CandleScan PRO • Inteligência Artificial de Alta Precisão para Traders de Cu
           </motion.div>
 
           {/* Bento Cell 6: Expert Candle Breakdown (grid-col: span 12, full-width) */}
-          <div className="card md:col-span-12 p-5 md:p-6 bg-[#18181b] border border-[#27272a] rounded-xl flex flex-col space-y-4 transition-all">
+          <div className="card md:col-span-12 p-5 md:p-6 bg-[#131722] border border-[#363a45] rounded-xl flex flex-col space-y-4 transition-all">
             
             <div className="flex items-center justify-between border-b border-zinc-800/65 pb-3">
               <div className="flex items-center gap-2">
@@ -2037,8 +2591,17 @@ CandleScan PRO • Inteligência Artificial de Alta Precisão para Traders de Cu
                 <h4 className="font-bold text-xs text-rose-400 uppercase tracking-wide">
                   O que as velinhas estão desenhando no gráfico
                 </h4>
-                <p className="text-[#a1a1aa] leading-relaxed text-xs">
-                  {activeAnalysis.leituraCandles || "Envie um gráfico para carregar a leitura explicada de cada velinha em português."}
+                <div className="bg-[#1e222d] border border-[#363a45] p-4 md:p-5 rounded-xl">
+                  {activeAnalysis.leituraCandles
+                    ? renderLeituraComBadges(activeAnalysis.leituraCandles)
+                    : (
+                      <p className="text-sm text-[#787b86] leading-relaxed">
+                        Envie um gráfico para carregar a leitura explicada de cada velinha em português.
+                      </p>
+                    )}
+                </div>
+                <p className="text-[10px] text-zinc-500 mt-1">
+                  *Esta seção detalha o significado das últimas velas no gráfico, usando analogias simples para facilitar o entendimento.
                 </p>
               </div>
 
@@ -2049,6 +2612,9 @@ CandleScan PRO • Inteligência Artificial de Alta Precisão para Traders de Cu
                 </h4>
                 <p className="text-zinc-400 leading-relaxed text-xs">
                   {activeAnalysis.cenarioProvavel || "A rota de maior probabilidade do preço será mostrada aqui logo após o envio do print."}
+                </p>
+                <p className="text-[10px] text-zinc-500 mt-1">
+                  *Aqui você encontra a previsão mais provável para o movimento do preço nas próximas horas, baseada na análise da IA.
                 </p>
               </div>
             </div>

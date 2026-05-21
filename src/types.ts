@@ -1,3 +1,10 @@
+export interface SyntheticCandle {
+  open: number;
+  high: number;
+  low: number;
+  close: number;
+}
+
 export interface ChartAnalysis {
   ativoCooptado: string;
   tempoGrafico: string;
@@ -13,7 +20,9 @@ export interface ChartAnalysis {
   stopLoss: string;
   alvo: string;
   nivelConfianca: string; // "Baixo" | "Médio" | "Alto"
+  relacaoRiscoRetorno?: string;
   comentarioAnalista: string;
+  syntheticCandles?: SyntheticCandle[];
   rompimentoDetectado?: boolean;
   rompimentoComentario?: string;
 }
@@ -58,6 +67,12 @@ export interface PresetChart {
   analysis: ChartAnalysis;
 }
 
+export interface SavedAnalysisImage {
+  name: string;
+  mimeType: string;
+  base64: string;
+}
+
 export interface SavedAnalysis {
   id: string;
   timestamp: string;
@@ -68,4 +83,12 @@ export interface SavedAnalysis {
   nivelConfianca: string;
   analysis: ChartAnalysis;
   imageCount: number;
+  /** Prints em base64 para consulta offline no histórico */
+  previewImages?: SavedAnalysisImage[];
+}
+
+/** Evento PWA beforeinstallprompt (Chromium) */
+export interface BeforeInstallPromptEvent extends Event {
+  prompt: () => Promise<void>;
+  userChoice: Promise<{ outcome: "accepted" | "dismissed"; platform: string }>;
 }

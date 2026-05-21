@@ -1,5 +1,20 @@
 @import "tailwindcss";
 
+/* TradingView-inspired dark palette */
+:root {
+  --tv-bg-primary: #131722;
+  --tv-bg-secondary: #1e222d;
+  --tv-bg-tertiary: #2a2e39;
+  --tv-border: #363a45;
+  --tv-text-primary: #d1d4dc;
+  --tv-text-muted: #787b86;
+  --tv-bull: #26a69a;
+  --tv-bear: #ef5350;
+  --tv-entry: #f59e0b;
+  --tv-target: #26a69a;
+  --tv-stop: #ef5350;
+}
+
 /* Refined custom visual style utilities */
 @layer utilities {
   .custom-scrollbar::-webkit-scrollbar {

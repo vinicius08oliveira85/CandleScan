@@ -19,13 +19,26 @@ export const PRESET_CHARTS: PresetChart[] = [
       cenarioProvavel: "O preço deve dar uma leve respirada para trás (cair um pouquinho) até perto de $4,28 ou $4,30. É uma retração natural para ganhar fôlego antes de tentar subir de novo.",
       acaoRecomendada: "Aguardar (Melhor esperar o preço baratear)",
       tipoEntrada: "Pisar de leve no chão recém-testado após o preço recuar para checar a segurança do apoio (Pullback)",
-      pontoEntrada: "Esperar o preço cair perto de $4,28 para comprar mais barato com menos risco.",
-      stopLoss: "$4,22 (Seu cinto de segurança: se o preço despencar abaixo disso, você sai para não perder quase nada)",
-      alvo: "$4,38 (Seu primeiro destino para sair feliz com o dinheiro no bolso).",
+      pontoEntrada: "$4,28 (esperar retração para comprar mais barato)",
+      stopLoss: "$4,22 (cinto de segurança se o preço despencar)",
+      alvo: "$4,38 (primeiro destino para realizar lucro)",
       nivelConfianca: "Médio",
-      comentarioAnalista: "Olá iniciante! Nunca compre quando o preço acabou de subir muito rápido e bateu no teto de $4,38. Deixe o preço cair un pouquinho perto do piso de $4,28-$4,30. Operar com paciência protege seu dinheiro de armadilhas bobas!",
+      relacaoRiscoRetorno: "1:1,7 — equilibrada (ganho um pouco maior que o risco)",
+      comentarioAnalista: "Se perder, você perde cerca de $0,06 até o stop; se ganhar, você ganha cerca de $0,10 até o alvo. Olá iniciante! Nunca compre quando o preço acabou de subir muito rápido e bateu no teto de $4,38. Deixe o preço cair um pouquinho perto do piso de $4,28-$4,30.",
       rompimentoDetectado: false,
-      rompimentoComentario: ""
+      rompimentoComentario: "",
+      syntheticCandles: [
+        { open: 4.18, high: 4.21, low: 4.16, close: 4.20 },
+        { open: 4.20, high: 4.24, low: 4.19, close: 4.23 },
+        { open: 4.23, high: 4.27, low: 4.22, close: 4.26 },
+        { open: 4.26, high: 4.30, low: 4.25, close: 4.29 },
+        { open: 4.29, high: 4.33, low: 4.28, close: 4.32 },
+        { open: 4.32, high: 4.36, low: 4.31, close: 4.35 },
+        { open: 4.35, high: 4.38, low: 4.34, close: 4.37 },
+        { open: 4.37, high: 4.39, low: 4.35, close: 4.36 },
+        { open: 4.36, high: 4.38, low: 4.33, close: 4.34 },
+        { open: 4.34, high: 4.38, low: 4.33, close: 4.37 }
+      ]
     }
   },
   {
@@ -46,13 +59,26 @@ export const PRESET_CHARTS: PresetChart[] = [
       cenarioProvavel: "Como o 'piso' estourou para baixo, a tendência é o preço dar um pequeno ensaio de subida para testar os $58,50 (teto temporário) e depois continuar deslizando em direção a $57,80.",
       acaoRecomendada: "Vender (Aproveitar a queda)",
       tipoEntrada: "Entrar em terreno plano de descida depois que o chão de apoio rachou e desabou de vez (Rompimento de Chão)",
-      pontoEntrada: "Se o preço subir um tiquinho até $58,50 e falhar, é o ponto ideal para iniciar uma operação buscando lucrar com a queda.",
-      stopLoss: "$58,85 (Cinto de segurança: caso o preço suba além disso, cancelamos a operação para proteger seu bolso)",
-      alvo: "$57,90 (Onde você encerra a operação realizada com lucro garantido).",
+      pontoEntrada: "$58,50 (entrada no reteste após rompimento do piso)",
+      stopLoss: "$58,85 (stop de proteção acima do reteste)",
+      alvo: "$57,90 (meta para realizar lucro na queda)",
       nivelConfianca: "Alto",
+      relacaoRiscoRetorno: "1:1,7 — viável (lucro na queda supera o risco do stop)",
       comentarioAnalista: "Quando um 'piso' forte é rompido para baixo, ele vira um 'teto'. É um conceito clássico e seguro! Não tente adivinhar fundo comprando enquanto está caindo de forma violenta. Siga o fluxo de quem está vendendo.",
       rompimentoDetectado: true,
-      rompimentoComentario: "ATENÇÃO: O piso forte de suporte nos R$ 58,50 foi quebrado com extrema convicção! O fechamento de múltiplas velas vermelhas encorpadas abaixo deste nível confirma que a força de queda rompeu a defesa compradora, abrindo caminho para mais perdas rápidas."
+      rompimentoComentario: "ATENÇÃO: O piso forte de suporte nos R$ 58,50 foi quebrado com extrema convicção! O fechamento de múltiplas velas vermelhas encorpadas abaixo deste nível confirma que a força de queda rompeu a defesa compradora, abrindo caminho para mais perdas rápidas.",
+      syntheticCandles: [
+        { open: 59.10, high: 59.15, low: 58.95, close: 59.00 },
+        { open: 59.00, high: 59.05, low: 58.80, close: 58.85 },
+        { open: 58.85, high: 58.90, low: 58.65, close: 58.70 },
+        { open: 58.70, high: 58.75, low: 58.55, close: 58.58 },
+        { open: 58.58, high: 58.62, low: 58.48, close: 58.50 },
+        { open: 58.50, high: 58.55, low: 58.35, close: 58.38 },
+        { open: 58.38, high: 58.42, low: 58.20, close: 58.22 },
+        { open: 58.22, high: 58.28, low: 58.05, close: 58.08 },
+        { open: 58.08, high: 58.12, low: 57.95, close: 57.98 },
+        { open: 57.98, high: 58.05, low: 57.85, close: 57.88 }
+      ]
     }
   },
   {
@@ -73,13 +99,26 @@ export const PRESET_CHARTS: PresetChart[] = [
       cenarioProvavel: "O preço deve continuar quicando feito bolinha de tênis de mesa entre $34,10 e $34,80 pelos próximos períodos, até que apareça uma grande notícia ou movimento financeiro.",
       acaoRecomendada: "Comprar (Apenas perto do piso)",
       tipoEntrada: "Terreno plano e restrito: preço quicando feito bolinha entre o chão firme e o teto rígido",
-      pontoEntrada: "Comprar bem baratinho perto de $34,15, logo após o preço bater lá embaixo no piso e dar um sinal de que vai segurar.",
-      stopLoss: "$33,95 (Cinto de segurança posicionado estrategicamente um pouco abaixo do piso histórico do canal)",
-      alvo: "$34,70 (Sair correndo com o lucro no bolso logo antes do preço trombar com o teto de novo).",
+      pontoEntrada: "$34,15 (comprar perto do piso do canal)",
+      stopLoss: "$33,95 (stop abaixo do piso histórico)",
+      alvo: "$34,70 (realizar lucro antes do teto)",
       nivelConfianca: "Médio",
+      relacaoRiscoRetorno: "1:3,7 — viável (lucro no teto compensa bem o stop apertado)",
       comentarioAnalista: "Operar mercados laterais exige metas rápidas. Compre no piso, venda no teto. Se uma vela gigante fechar fora dessa caixinha (rompimento), caia fora imediatamente pois significa que uma nova tendência violenta começou!",
       rompimentoDetectado: false,
-      rompimentoComentario: ""
+      rompimentoComentario: "",
+      syntheticCandles: [
+        { open: 34.45, high: 34.52, low: 34.40, close: 34.48 },
+        { open: 34.48, high: 34.55, low: 34.42, close: 34.50 },
+        { open: 34.50, high: 34.58, low: 34.45, close: 34.42 },
+        { open: 34.42, high: 34.48, low: 34.35, close: 34.38 },
+        { open: 34.38, high: 34.45, low: 34.30, close: 34.32 },
+        { open: 34.32, high: 34.40, low: 34.25, close: 34.35 },
+        { open: 34.35, high: 34.50, low: 34.33, close: 34.48 },
+        { open: 34.48, high: 34.62, low: 34.45, close: 34.55 },
+        { open: 34.55, high: 34.72, low: 34.52, close: 34.68 },
+        { open: 34.68, high: 34.78, low: 34.60, close: 34.65 }
+      ]
     }
   }
 ];

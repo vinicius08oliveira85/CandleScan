@@ -3,7 +3,7 @@ import { GoogleGenAI, Type } from '@google/genai';
 import dotenv from 'dotenv';
 
 dotenv.config({ path: '.env.local' });
-dotenv.config();
+// dotenv.config(); // Removido para evitar reconfiguração desnecessária, .env.local já tem precedência.
 
 const app = express();
 const port = 3000;
@@ -35,6 +35,10 @@ function getGemini(): GoogleGenAI {
 const SYSTEM_INSTRUCTION = `Você é um analista profissional de trading amigável e focado em EXPLICAR DE FORMA SIMPLES para iniciantes e leigos.
 Sua função é analisar imagens (prints de gráficos de velas/candles enviados pelo usuário) e fornecer uma avaliação extremamente clara, prática e didática sobre o momento atual do preço do ativo.
 
+PRIORIDADE MÁXIMA — SEGURANÇA DO VALOR:
+- Proteger o capital vem antes de buscar lucro agressivo.
+- No comentarioAnalista, inclua: "Se perder, você perde X; se ganhar, você ganha Y" com base em entrada, stop e alvo.
+
 Siga rigorosamente estas diretrizes ao analisar a imagem do gráfico:
 1. Identifique a Direção Principal do Preço (Tendência):
    - Alta (Subindo)
@@ -65,8 +69,15 @@ Siga rigorosamente estas diretrizes ao analisar a imagem do gráfico:
    - Ponto ideal de entrada (Qual preço aproximado comprar/vender)
    - Limite de Segurança (Stop loss): Explique como "O cinto de segurança se der errado, para evitar perdas"
    - Alvo de Ganho (Take profit): Explique como "A meta de onde colocar o lucro no bolso"
-8. Atribua um Nível de Confiança objetivo (Baixo, Médio ou Alto).
+8. Nível de Confiança (nivelConfianca) — baseado na NITIDEZ VISUAL dos candles e legibilidade dos preços na imagem (Alto = nítido; Baixo = borrado/cortado).
 9. Classifique se há um rompimento de suporte ou resistência e comente sobre o mesmo.
+10. Dados Sintéticos para Visualização (syntheticCandles) — OBRIGATÓRIO:
+   - Identifique os 10 últimos candles visíveis no gráfico, da esquerda para a direita (o último item do array é o candle mais recente).
+   - Extraia valores OHLC numéricos proporcionais ao movimento real: se o eixo de preços estiver legível, use esses valores; caso contrário, construa uma escala relativa coerente preservando amplitude, direção e proporção corpo/pavio de cada vela.
+   - Regras matemáticas: high >= max(open, close); low <= min(open, close); a sequência deve refletir a tendência e o momento identificados.
+   - Não invente velas invisíveis. Retorne exatamente 10 objetos { open, high, low, close }.
+11. Formatação de Preços (pontoEntrada, stopLoss, alvo) — VALOR NUMÉRICO PURO primeiro, explicação lúdica entre parênteses depois.
+12. relacaoRiscoRetorno — formato "1:X — viável/equilibrada/fraca" com base em entrada, stop e alvo.
 
 ATENÇÃO: Nunca invente dados que não estejam claramente visíveis na tela do gráfico. Use uma comunicação calorosa, empática, parecendo um professor paciente ensinando uma pessoa querida do zero.`;
 
@@ -109,7 +120,7 @@ app.post('/api/analyze', async (req, res) => {
 
     // Call Gemini with schema configuration
     const response = await aiInstance.models.generateContent({
-      model: 'gemini-3.5-flash',
+      model: 'gemini-1.5-flash',
       contents: { parts: contents },
       config: {
         systemInstruction: SYSTEM_INSTRUCTION,
@@ -130,16 +141,30 @@ app.post('/api/analyze', async (req, res) => {
             pontoEntrada: { type: Type.STRING, description: 'Ponto ideal exato de entrada sugerido' },
             stopLoss: { type: Type.STRING, description: 'Stop loss sugerido para controle de risco' },
             alvo: { type: Type.STRING, description: 'Alvo ideal de saída (Take Profit)' },
-            nivelConfianca: { type: Type.STRING, description: 'Nível de confiança da análise técnica: Baixo, Médio ou Alto' },
+            nivelConfianca: { type: Type.STRING, description: 'Baixo, Médio ou Alto — baseado na nitidez visual dos candles na imagem' },
+            relacaoRiscoRetorno: { type: Type.STRING, description: 'Relação risco/retorno no formato "1:X — viável/equilibrada/fraca"' },
             comentarioAnalista: { type: Type.STRING, description: 'Um comentário do mentor direto para o trader sobre armadilhas locais ou gestão de risco' },
+            syntheticCandles: { 
+              type: Type.ARRAY, 
+              items: {
+                type: Type.OBJECT,
+                properties: {
+                  open: { type: Type.NUMBER },
+                  high: { type: Type.NUMBER },
+                  low: { type: Type.NUMBER },
+                  close: { type: Type.NUMBER }
+                }
+              },
+              description: "Array com os 10 últimos candles representados numericamente (OHLC) para reconstrução gráfica fiel no frontend. Valores proporcionais ao movimento real visível na imagem."
+            },
             rompimentoDetectado: { type: Type.BOOLEAN, description: "Defina como true se o preço rompeu recentemente ou está rompendo um suporte (piso) ou resistência (teto) importante; caso contrário, false" },
             rompimentoComentario: { type: Type.STRING, description: "Breve explicação/comentário sobre a força e direção deste rompimento (ex: 'Rompimento forte de teto sustentado por velas verdes volumosas' ou 'Piso quebrado com muita agressividade'), ou vazio se rompimentoDetectado for false" }
           },
           required: [
             'ativoCooptado', 'tempoGrafico', 'tendencia', 'momento', 'leituraCandles',
             'suporte', 'resistencia', 'cenarioProvavel', 'acaoRecomendada', 
-            'tipoEntrada', 'pontoEntrada', 'stopLoss', 'alvo', 'nivelConfianca', 
-            'comentarioAnalista', 'rompimentoDetectado', 'rompimentoComentario'
+            'tipoEntrada', 'pontoEntrada', 'stopLoss', 'alvo', 'nivelConfianca', 'relacaoRiscoRetorno',
+            'comentarioAnalista', 'rompimentoDetectado', 'rompimentoComentario', 'syntheticCandles'
           ]
         }
       }
@@ -211,7 +236,7 @@ app.post('/api/analyze-multi', async (req, res) => {
     });
 
     const response = await aiInstance.models.generateContent({
-      model: 'gemini-3.5-flash',
+      model: 'gemini-1.5-flash',
       contents: { parts: contents },
       config: {
         systemInstruction: MULTI_SYSTEM_INSTRUCTION,
