@@ -1,5 +1,5 @@
 /** Health check leve — sempre 200; indica se há chave no ambiente do servidor. */
-module.exports = (req, res) => {
+export default function handler(req, res) {
   try {
     if (req.method !== "GET" && req.method !== "HEAD") {
       return res.status(405).json({ error: "Method not allowed" });
@@ -11,15 +11,15 @@ module.exports = (req, res) => {
       ok: true,
       geminiConfigured: !!envKey,
       vercelEnv: process.env.VERCEL_ENV || "unknown",
-      runtime: "standalone-cjs",
+      runtime: "standalone-esm",
     });
   } catch (err) {
     return res.status(200).json({
       ok: true,
       geminiConfigured: false,
       vercelEnv: "unknown",
-      runtime: "standalone-cjs",
+      runtime: "standalone-esm",
       warning: err.message,
     });
   }
-};
+}

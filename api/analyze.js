@@ -1,5 +1,10 @@
-const path = require("path");
-const fs = require("fs");
+import { createRequire } from "node:module";
+import path from "node:path";
+import fs from "node:fs";
+import { fileURLToPath } from "node:url";
+
+const require = createRequire(import.meta.url);
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 let app;
 
@@ -19,13 +24,12 @@ function resolveBundlePath() {
 
 function loadApp() {
   if (!app) {
-    const bundlePath = resolveBundlePath();
-    app = require(bundlePath);
+    app = require(resolveBundlePath());
   }
   return app;
 }
 
-module.exports = (req, res) => {
+export default function handler(req, res) {
   try {
     const expressApp = loadApp();
     return expressApp(req, res);
@@ -36,4 +40,4 @@ module.exports = (req, res) => {
       code: "BOOT_ERROR",
     });
   }
-};
+}
