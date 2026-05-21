@@ -38,6 +38,13 @@ export interface ChartAnalysis {
   relacaoRiscoRetorno?: string;
   comentarioAnalista: string;
   syntheticCandles?: SyntheticCandle[];
+  /** Rótulos HH:mm lidos do eixo X do print (10 itens, último pode ser "Agora") */
+  candleTimeLabels?: string[];
+  /** Faixa visível do eixo Y no print (mesma escala dos candles) */
+  eixoPrecoMin?: number;
+  eixoPrecoMax?: number;
+  /** ISO — âncora para reconstruir horários ao atualizar prints */
+  graficoReferenciaEm?: string;
   rompimentoDetectado?: boolean;
   rompimentoComentario?: string;
   /** Gerente de trade — preenchido quando há posição aberta */

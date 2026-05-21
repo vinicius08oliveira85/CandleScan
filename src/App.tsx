@@ -52,6 +52,11 @@ import {
   mergeHistoryAnalysis,
   getSnapshotIndexForPhoto,
 } from "./historyStorage";
+import {
+  normalizeChartAnalysis,
+  buildChartViewModel,
+  priceToChartPercent,
+} from "./chartData";
 import { motion } from "motion/react";
 
 export default function App() {
@@ -546,9 +551,13 @@ export default function App() {
     }
 
     const data: ChartAnalysis = await res.json();
-    setActiveAnalysis(data);
+    const normalized = normalizeChartAnalysis(
+      data,
+      getEffectiveDadosCompra()?.precoEntrada
+    );
+    setActiveAnalysis(normalized);
     setSelectedPresetId("");
-    persistAnalysisToHistory(data, uploadedPhotos, evolutionOnlyPhotos);
+    persistAnalysisToHistory(normalized, uploadedPhotos, evolutionOnlyPhotos);
 
     const isEvolution = !!evolutionOnlyPhotos?.length;
     setToastType(isEvolution ? "history" : "analyze");
@@ -644,7 +653,9 @@ export default function App() {
   };
 
   const loadHistoryItem = (item: SavedAnalysis) => {
-    setActiveAnalysis(item.analysis);
+    setActiveAnalysis(
+      normalizeChartAnalysis(item.analysis, item.dadosCompra?.precoEntrada)
+    );
     setSelectedPresetId("");
     setAnalysisError(null);
     setActiveHistoryId(item.id);
@@ -806,14 +817,6 @@ export default function App() {
   const actionCfg = getActionColorDetails(activeAnalysis.acaoRecomendada);
   const ticketLabels = getTradingTicketLabels(activeAnalysis.acaoRecomendada);
   const confidenceDetails = getConfidenceDetails(activeAnalysis.nivelConfianca);
-
-  // Pre-configured list of background candles to show visually when using presets
-  interface SimulatedCandle {
-    open: number;
-    close: number;
-    high: number;
-    low: number;
-  }
 
   // Extrai o primeiro valor numérico de strings como "$4,32" ou "R$ 58,50"
   const parsePrice = (priceString: string): number | null => {
@@ -1147,61 +1150,6 @@ export default function App() {
     );
   };
 
-  const generateDynamicCandles = (tendencia: string, momento: string): SimulatedCandle[] => {
-    const candles: SimulatedCandle[] = [];
-    const numCandles = 10;
-    let lastClose = 50; // Starting price, normalized for the dummy graph
-
-    const isUpTrend = tendencia?.includes("Alta") || tendencia?.includes("up") || tendencia?.toLowerCase().includes("sub");
-    const isDownTrend = tendencia?.includes("Baixa") || tendencia?.includes("down") || tendencia?.toLowerCase().includes("cai");
-    const isLateral = tendencia?.includes("Lateral") || tendencia?.includes("lado");
-
-    for (let i = 0; i < numCandles; i++) {
-      let open = lastClose;
-      let close, high, low;
-
-      let bodySizeFactor = 1;
-      let wickSizeFactor = 1;
-
-      if (momento.includes("Forte")) {
-        bodySizeFactor = 1.5;
-        wickSizeFactor = 0.5; // Strong candles usually have smaller wicks
-      } else if (momento.includes("cansando") || momento.includes("indeciso") || momento.includes("dúvida")) {
-        bodySizeFactor = 0.5;
-        wickSizeFactor = 1.5; // Indecision means smaller bodies, longer wicks
-      }
-
-      if (isUpTrend) {
-        close = open + (Math.random() * 8 + 2) * bodySizeFactor; // Green candle
-        if (momento.includes("cansando") && i >= numCandles - 2) {
-          close = open + (Math.random() * 3 - 1.5) * bodySizeFactor; // Small body, potential reversal
-        }
-        high = Math.max(open, close) + (Math.random() * 5) * wickSizeFactor;
-        low = Math.min(open, close) - (Math.random() * 3) * wickSizeFactor;
-      } else if (isDownTrend) {
-        close = open - (Math.random() * 8 + 2) * bodySizeFactor; // Red candle
-        if (momento.includes("cansando") && i >= numCandles - 2) {
-          close = open - (Math.random() * 3 - 1.5) * bodySizeFactor; // Small body, potential reversal
-        }
-        high = Math.max(open, close) + (Math.random() * 3) * wickSizeFactor;
-        low = Math.min(open, close) - (Math.random() * 5) * wickSizeFactor;
-      } else { // Lateral
-        close = open + (Math.random() * 6 - 3) * bodySizeFactor; // Small body, mixed direction
-        high = Math.max(open, close) + (Math.random() * 7) * wickSizeFactor;
-        low = Math.min(low, open, close) - (Math.random() * 7) * wickSizeFactor;
-      }
-
-      // Ensure high is always >= open, close, low
-      high = Math.max(high, open, close);
-      // Ensure low is always <= open, close, high
-      low = Math.min(low, open, close);
-
-      candles.push({ open, close, high, low });
-      lastClose = close;
-    }
-    return candles;
-  };
-
   type TradeLineVariant = "entry" | "stop" | "target";
 
   const spreadLegendY = (
@@ -1237,86 +1185,27 @@ export default function App() {
     );
   };
 
-  const parseChartIntervalMinutes = (tempoGrafico: string): number => {
-    const t = (tempoGrafico || "").toLowerCase();
-    const match = t.match(/(\d+)\s*(min|minutos|m\b|hora|horas|h\b|dia|d\b)/);
-    if (!match) return 5;
-    const n = parseInt(match[1], 10);
-    const unit = match[2];
-    if (unit.startsWith("h")) return n * 60;
-    if (unit.startsWith("d")) return n * 1440;
-    return n;
-  };
-
   const renderDummyGraph = () => {
-    const tendenciaRaw = activeAnalysis.tendencia;
-    const momentoRaw = activeAnalysis.momento;
+    const chartVm = buildChartViewModel(
+      activeAnalysis,
+      getEffectiveDadosCompra()?.precoEntrada
+    );
+    const { chartMin, chartMax, chartRange, candles: realCandles, timeLabels, isBrlAxis } =
+      chartVm;
 
-    const rawCandlesSource =
-      activeAnalysis.syntheticCandles && activeAnalysis.syntheticCandles.length >= 2
-        ? activeAnalysis.syntheticCandles.slice(-10)
-        : generateDynamicCandles(tendenciaRaw, momentoRaw);
+    const toPct = (price: number) => priceToChartPercent(price, chartMin, chartRange);
 
-    const tradeNums = [
-      parsePrice(activeAnalysis.pontoEntrada),
-      parsePrice(activeAnalysis.stopLoss),
-      parsePrice(activeAnalysis.alvo),
-      parsePrice(activeAnalysis.resistencia),
-      parsePrice(activeAnalysis.suporte),
-      parsePrice(activeAnalysis.precoAtualEstimado),
-      getEffectiveDadosCompra()?.precoEntrada ?? null,
-    ].filter((p): p is number => p !== null && p > 0);
-
-    const candleNums = rawCandlesSource.flatMap((c) => [c.open, c.close, c.high, c.low]);
-    const candleMax = Math.max(...candleNums);
-    const candleMin = Math.min(...candleNums);
-    const candlesLookSynthetic =
-      tradeNums.length > 0 &&
-      candleMax <= 150 &&
-      candleMin >= 0 &&
-      Math.max(...tradeNums) > candleMax * 1.2;
-
-    let chartMin: number;
-    let chartMax: number;
-    let scaledCandles = rawCandlesSource;
-
-    if (candlesLookSynthetic) {
-      const tMin = Math.min(...tradeNums);
-      const tMax = Math.max(...tradeNums);
-      const span = tMax - tMin || 1;
-      const pad = span * 0.15;
-      chartMin = tMin - pad;
-      chartMax = tMax + pad;
-      const cRange = candleMax - candleMin || 1;
-      scaledCandles = rawCandlesSource.map((c) => ({
-        open: chartMin + ((c.open - candleMin) / cRange) * (chartMax - chartMin),
-        close: chartMin + ((c.close - candleMin) / cRange) * (chartMax - chartMin),
-        high: chartMin + ((c.high - candleMin) / cRange) * (chartMax - chartMin),
-        low: chartMin + ((c.low - candleMin) / cRange) * (chartMax - chartMin),
-      }));
-    } else {
-      const allNums = [...candleNums, ...tradeNums];
-      chartMin = Math.min(...allNums);
-      chartMax = Math.max(...allNums);
-      const pad = (chartMax - chartMin) * 0.1 || 0.5;
-      chartMin -= pad;
-      chartMax += pad;
-    }
-
-    const chartRange = chartMax - chartMin || 1;
-    const normalizePrice = (price: number) =>
-      ((price - chartMin) / chartRange) * 100;
-
-    const activeCandles = scaledCandles.map((c) => ({
-      open: normalizePrice(c.open),
-      close: normalizePrice(c.close),
-      high: normalizePrice(c.high),
-      low: normalizePrice(c.low),
+    const activeCandles = realCandles.map((c) => ({
+      open: toPct(c.open),
+      close: toPct(c.close),
+      high: toPct(c.high),
+      low: toPct(c.low),
+      raw: c,
     }));
 
     const getRelativeY = (price: number | null) => {
       if (price === null) return null;
-      return Math.max(2, Math.min(98, normalizePrice(price)));
+      return priceToChartPercent(price, chartMin, chartRange);
     };
 
     const resistanceY = getRelativeY(parsePrice(activeAnalysis.resistencia));
@@ -1328,31 +1217,17 @@ export default function App() {
 
     const priceLabel = (value: string) => formatDisplayPrice(value);
 
-    const priceRef =
-      activeAnalysis.pontoEntrada ||
-      activeAnalysis.precoAtualEstimado ||
-      activeAnalysis.alvo ||
-      "";
-    const isBrlAxis = /r\$/i.test(priceRef) || (!/\$/.test(priceRef) && priceRef.length > 0);
     const formatAxisPriceNumber = (n: number) =>
       isBrlAxis
         ? `R$ ${n.toFixed(2).replace(".", ",")}`
         : `$${n.toFixed(2)}`;
 
+    const formatCandlePrice = (n: number) => formatAxisPriceNumber(n);
+
     const priceTickCount = 5;
     const priceTicks = Array.from({ length: priceTickCount }, (_, i) => {
       const ratio = i / (priceTickCount - 1);
       return chartMax - ratio * chartRange;
-    });
-
-    const intervalMin = parseChartIntervalMinutes(activeAnalysis.tempoGrafico || "5 Minutos");
-    const candleCount = activeCandles.length;
-    const now = new Date();
-    const timeLabels = activeCandles.map((_, i) => {
-      if (i === candleCount - 1) return "Agora";
-      const minutesAgo = (candleCount - 1 - i) * intervalMin;
-      const t = new Date(now.getTime() - minutesAgo * 60_000);
-      return t.toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" });
     });
 
     type LegendItem = {
@@ -1421,6 +1296,7 @@ export default function App() {
           const bodySize = Math.abs(c.close - c.open);
           const ratio = range > 0 ? bodySize / range : 0;
           const isStrengthBull = isUp && ratio >= 0.70;
+          const raw = c.raw;
 
           const bottomWick = c.low;
           const wickHeight = range;
@@ -1433,12 +1309,22 @@ export default function App() {
               className="flex-1 h-full relative group/candle flex justify-center items-end min-w-0"
             >
               {/* Dynamic Tooltip on Hover */}
-              <div className="group-hover/candle:flex hidden absolute bottom-full mb-2 left-1/2 -translate-x-1/2 bg-[#121214] border border-[#27272a] text-zinc-100 p-2 text-[10px] w-48 flex-col z-30 pointer-events-none shadow-2xl transition-all duration-200 leading-normal gap-1 font-sans">
+              <div className="group-hover/candle:flex hidden absolute bottom-full mb-2 left-1/2 -translate-x-1/2 bg-[#121214] border border-[#27272a] text-zinc-100 p-2 text-[10px] w-52 flex-col z-30 pointer-events-none shadow-2xl transition-all duration-200 leading-normal gap-1 font-sans">
                 <div className="flex items-center justify-between border-b border-zinc-800 pb-1 mb-1 font-bold">
-                  <span>Vela #{i + 1}</span>
+                  <span>{timeLabels[i] || `Vela ${i + 1}`}</span>
                   <span className={isUp ? "text-emerald-400" : "text-rose-400"}>
                     {isUp ? "Alta 🟢" : "Baixa 🔴"}
                   </span>
+                </div>
+                <div className="grid grid-cols-2 gap-x-2 gap-y-0.5 text-[9px] font-mono text-zinc-300">
+                  <span className="text-zinc-500">Abertura</span>
+                  <span>{formatCandlePrice(raw.open)}</span>
+                  <span className="text-zinc-500">Fechamento</span>
+                  <span>{formatCandlePrice(raw.close)}</span>
+                  <span className="text-zinc-500">Máxima</span>
+                  <span>{formatCandlePrice(raw.high)}</span>
+                  <span className="text-zinc-500">Mínima</span>
+                  <span>{formatCandlePrice(raw.low)}</span>
                 </div>
                 <div className="flex justify-between text-zinc-400">
                   <span>Proporção do Corpo:</span>
@@ -1503,23 +1389,27 @@ export default function App() {
       </div>
     );
 
+    const legendPriceLine = (priceStr: string) => {
+      const main = formatDisplayPrice(priceStr);
+      const hint = getPriceExplanation(priceStr);
+      return hint ? `${main} (${hint})` : main;
+    };
+
     const legendRail = (
       <div
-        className="relative shrink-0 w-[4.25rem] sm:w-[5.5rem] md:w-[6.25rem] h-full border-l border-[#363a45]/40"
+        className="relative shrink-0 w-[5.5rem] sm:w-[6.75rem] md:w-[7.75rem] lg:w-[8.5rem] h-full border-l border-[#363a45]/40"
         aria-hidden={uniqueLegend.length === 0}
       >
         {uniqueLegend.map((item) => (
           <div
             key={`badge-${item.id}`}
-            className={`absolute right-0.5 -translate-y-1/2 max-w-full px-1 py-0.5 rounded text-[7px] sm:text-[8px] font-mono font-bold leading-tight border truncate ${item.chipClass}`}
+            className={`absolute right-0.5 -translate-y-1/2 max-w-full px-1 py-0.5 rounded text-[7px] sm:text-[8px] font-mono font-bold leading-tight border ${item.chipClass}`}
             style={{ bottom: `${spreadY[item.id] ?? item.y}%` }}
-            title={`${item.label} ${priceLabel(item.price)}`}
+            title={legendPriceLine(item.price)}
           >
             <span className="block uppercase tracking-wide opacity-80">{item.label}</span>
-            <span className="tabular-nums block truncate">
-              {item.price.includes("R$") || item.price.includes("$")
-                ? item.price
-                : priceLabel(item.price)}
+            <span className="tabular-nums block line-clamp-2 break-words">
+              {legendPriceLine(item.price)}
             </span>
           </div>
         ))}
@@ -1535,10 +1425,7 @@ export default function App() {
                 key={`m-${item.id}`}
                 className={`text-[8px] font-mono font-bold px-1.5 py-0.5 rounded border ${item.chipClass}`}
               >
-                {item.label}{" "}
-                {item.price.includes("R$") || item.price.includes("$")
-                  ? item.price
-                  : priceLabel(item.price)}
+                {item.label} {legendPriceLine(item.price)}
               </span>
             ))}
           </div>
@@ -3348,9 +3235,14 @@ CandleScan FÁCIL • Análise didática com IA — use sempre stop loss.
                 {renderDummyGraph()}
               </div>
               <p className="text-[11px] text-[#787b86] leading-normal">
-                *Gráfico reconstruído a partir dos últimos 10 candles detectados pela IA
-                {activeAnalysis.syntheticCandles?.length ? " (dados reais do print)" : " (fallback estimado)"}.
+                *Gráfico reconstruído a partir dos últimos 10 candles do print
+                {activeAnalysis.candleTimeLabels?.length
+                  ? " — horários do eixo X"
+                  : activeAnalysis.syntheticCandles?.length
+                    ? " — OHLC alinhados ao print"
+                    : " — estimativa pela tendência"}.
                 Linhas: <span className="text-amber-400 font-mono">Entrada</span>, <span className="text-[#ef5350] font-mono">Stop</span>, <span className="text-[#26a69a] font-mono">Alvo</span>.
+                Atualize com novo print para avançar a linha do tempo.
               </p>
             </div>
 

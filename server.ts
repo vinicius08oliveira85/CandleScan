@@ -75,11 +75,14 @@ Siga rigorosamente estas diretrizes ao analisar a imagem do gráfico:
    - Baixo: print borrado, cortado, muito pequeno ou com elementos que impedem ler velas e preços com segurança.
    - Nunca atribua "Alto" se a nitidez visual dos candles for duvidosa.
 9. Classifique se há um rompimento de suporte ou resistência e comente sobre o mesmo.
-10. Dados Sintéticos para Visualização (syntheticCandles) — OBRIGATÓRIO:
-   - Identifique os 10 últimos candles visíveis no gráfico, da esquerda para a direita (o último item do array é o candle mais recente).
-   - Extraia valores OHLC numéricos proporcionais ao movimento real: se o eixo de preços estiver legível, use esses valores; caso contrário, construa uma escala relativa coerente preservando amplitude, direção e proporção corpo/pavio de cada vela.
-   - Regras matemáticas: high >= max(open, close); low <= min(open, close); a sequência deve refletir a tendência e o momento identificados.
-   - Não invente velas invisíveis. Retorne exatamente 10 objetos { open, high, low, close }.
+10. Dados do Gráfico para Reconstrução Visual — OBRIGATÓRIO (mesma escala do print):
+   - syntheticCandles: exatamente 10 velas visíveis, da esquerda para a direita (última = mais recente).
+   - Cada OHLC deve estar na MOEDA REAL do ativo (R$ ou $), na MESMA escala numérica de pontoEntrada, stopLoss, alvo, suporte e resistência.
+   - Leia os valores no eixo Y do print: eixoPrecoMin = menor preço visível no eixo; eixoPrecoMax = maior preço visível no eixo.
+   - candleTimeLabels: 10 rótulos do eixo X (ex: "16:26", "16:31", …); o último deve ser "Agora" quando for a vela atual.
+   - PROIBIDO usar escala 0–100 ou 0–150 abstrata quando o ativo custa dezenas de reais/dólares no print.
+   - Regras: high >= max(open, close); low <= min(open, close); preserve direção, tamanho de corpo e pavios.
+   - Não invente velas fora da tela.
 11. Formatação de Preços de Operação (pontoEntrada, stopLoss, alvo) — OBRIGATÓRIO:
    - Estrutura fixa: VALOR NUMÉRICO PURO primeiro, depois explicação lúdica breve entre parênteses.
    - Ativos brasileiros (B3): "R$ X,XX (explicação curta)" — ex: "R$ 4,28 (pisar no chão recém-testado)".

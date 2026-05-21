@@ -46,7 +46,22 @@ export const CHART_ANALYSIS_SCHEMA = {
           close: { type: SchemaType.NUMBER },
         },
       },
-      description: 'Exatamente 10 candles OHLC em ordem cronológica',
+      description:
+        'Exatamente 10 candles OHLC em REAIS da moeda do ativo (mesma escala de pontoEntrada/stop/alvo). Último = vela mais recente.',
+    },
+    candleTimeLabels: {
+      type: SchemaType.ARRAY,
+      items: { type: SchemaType.STRING },
+      description:
+        '10 horários do eixo X do print (ex: "16:26") da esquerda para direita; último = "Agora" se visível',
+    },
+    eixoPrecoMin: {
+      type: SchemaType.NUMBER,
+      description: 'Menor preço legível no eixo Y esquerdo do print',
+    },
+    eixoPrecoMax: {
+      type: SchemaType.NUMBER,
+      description: 'Maior preço legível no eixo Y esquerdo do print',
     },
     rompimentoDetectado: { type: SchemaType.BOOLEAN, description: 'true se houve rompimento recente' },
     rompimentoComentario: { type: SchemaType.STRING, description: 'Comentário sobre rompimento ou vazio' },
