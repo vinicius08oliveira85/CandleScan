@@ -1,12 +1,10 @@
-{
+PP{
   "version": 2,
+  "public": "dist",
   "builds": [
     {
       "src": "vite.config.ts",
-      "use": "@vercel/static-build",
-      "options": {
-        "maxLambdaSize": "45mb"
-      }
+      "use": "@vercel/static-build"
     },
     {
       "src": "dist/server.cjs",
@@ -16,11 +14,7 @@
   "routes": [
     {
       "src": "/api/(.*)",
-      "dest": "dist/server.cjs"
-    },
-    {
-      "src": "/(.*)",
-      "dest": "dist/index.html"
+      "dest": "/dist/server.cjs"
     }
   ]
 }
