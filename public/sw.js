@@ -1,4 +1,4 @@
-/* Service worker mínimo — requisito de instalabilidade PWA em navegadores Chromium */
+/* Service worker mínimo — instalabilidade PWA; não intercepta API nem POST */
 const CACHE_NAME = "candlescan-shell-v1";
 
 self.addEventListener("install", (event) => {
@@ -10,5 +10,13 @@ self.addEventListener("activate", (event) => {
 });
 
 self.addEventListener("fetch", (event) => {
-  event.respondWith(fetch(event.request));
+  if (event.request.method !== "GET") return;
+
+  const url = new URL(event.request.url);
+  if (url.pathname.startsWith("/api/")) return;
+  if (url.origin !== self.location.origin) return;
+
+  event.respondWith(
+    fetch(event.request).catch(() => caches.match(event.request))
+  );
 });

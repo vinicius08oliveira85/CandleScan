@@ -344,9 +344,14 @@ export default function App() {
 
     if (!res.ok) {
       const errJson = await res.json().catch(() => ({}));
+      const statusHint =
+        res.status === 405
+          ? "A rota /api/analyze não está ativa no servidor (deploy). Confira o backend na Vercel."
+          : res.status === 401 || res.status === 403
+          ? "Chave API inválida ou sem permissão."
+          : "Configure a chave Gemini em Configurações ou GEMINI_API_KEY no servidor.";
       throw new Error(
-        errJson.error || //
-          `Erro do servidor (${res.status}). Verifique se sua chave API do Gemini está configurada.`
+        errJson.error || `Erro do servidor (${res.status}). ${statusHint}`
       );
     }
 

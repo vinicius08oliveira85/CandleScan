@@ -346,8 +346,10 @@ app.post('/api/analyze-multi', async (req, res) => {
   }
 });
 
+const isVercelRuntime = !!(process.env.VERCEL || process.env.VERCEL_ENV);
+
 // Em produção local, serve o frontend estático; na Vercel o static-build cuida disso.
-if (!process.env.VERCEL) {
+if (!isVercelRuntime) {
   const distPath = path.join(process.cwd(), 'dist');
   app.use(express.static(distPath));
   app.get('*', (req, res) => {
@@ -355,7 +357,7 @@ if (!process.env.VERCEL) {
   });
 }
 
-if (!process.env.VERCEL) {
+if (!isVercelRuntime) {
   app.listen(port, () => {
     console.log(`Server listening at http://localhost:${port}`);
   });
