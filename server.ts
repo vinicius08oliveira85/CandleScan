@@ -13,24 +13,22 @@ const port = 3000;
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ limit: '50mb', extended: true }));
 
-// Lazy initializer for Gemini client
-let ai: GoogleGenAI | null = null;
-function getGemini(): GoogleGenAI {
-  if (!ai) {
-    const key = process.env.GEMINI_API_KEY;
-    if (!key) {
-      throw new Error('A API key (GEMINI_API_KEY) não está configurada nos segredos locais. Acesse a guia Configurações > Segredos para adicioná-la.');
-    }
-    ai = new GoogleGenAI({
-      apiKey: key,
-      httpOptions: {
-        headers: {
-          'User-Agent': 'aistudio-build',
-        }
-      }
-    });
+/** Prioridade: chave do usuário (body) > GEMINI_API_KEY do ambiente */
+function getGemini(userApiKey?: string): GoogleGenAI {
+  const key = (userApiKey?.trim() || process.env.GEMINI_API_KEY || '').trim();
+  if (!key) {
+    throw new Error(
+      'Nenhuma chave API do Gemini encontrada. Salve sua chave em Configurações no app ou defina GEMINI_API_KEY no servidor.'
+    );
   }
-  return ai;
+  return new GoogleGenAI({
+    apiKey: key,
+    httpOptions: {
+      headers: {
+        'User-Agent': 'aistudio-build',
+      },
+    },
+  });
 }
 
 const SYSTEM_INSTRUCTION = `Você é um analista profissional de trading amigável e focado em EXPLICAR DE FORMA SIMPLES para iniciantes e leigos.
@@ -40,9 +38,9 @@ PRIORIDADE MÁXIMA — SEGURANÇA DO VALOR:
 - Proteger o capital do investidor vem antes de buscar lucro agressivo.
 - Sempre defina um stop loss realista e nunca incentive operar sem limite de perda.
 - Se a relação risco/retorno for fraca (ganho menor que o risco), recomende "Aguardar" ou reduzir tamanho da posição.
-- No campo comentarioAnalista, inclua OBRIGATORIAMENTE uma frase curta e direta sobre risco de perda vs ganho, no formato:
+- Sem dadosCompra: no comentarioAnalista inclua OBRIGATORIAMENTE e no formato EXATO:
   "Se perder, você perde [valor ou % aproximado]; se ganhar, você ganha [valor ou % aproximado]."
-  Use os preços de entrada, stop e alvo que você mesmo sugeriu para calcular X e Y.
+  Use entrada, stop e alvo sugeridos para calcular os valores.
 
 Siga rigorosamente estas diretrizes ao analisar a imagem do gráfico:
 1. Identifique a Direção Principal do Preço (Tendência):
@@ -106,7 +104,7 @@ MODO GERENTE DE TRADE (quando o usuário informar dadosCompra com precoEntrada e
   - VENDER AGORA: sinais técnicos de fraqueza, reversão ou alvo atingido.
   - REALIZAR PARCIAL: lucro parcial bom, mas ainda há espaço — sugira travar parte do ganho.
   - STOP ATIVADO: preço rompeu ou está muito próximo do stop loss da operação.
-- No comentarioAnalista, OBRIGATÓRIO incluir frase no formato:
+- No comentarioAnalista, OBRIGATÓRIO incluir frase no formato EXATO:
   "Você comprou a [precoEntrada formatado], o preço está em [precoAtualEstimado]. Seu lucro/prejuízo atual é de [valor aproximado em R$ ou %]. Recomendo [statusTrade em linguagem simples] porque [motivo técnico lúdico]."
 - acaoRecomendada deve refletir a gestão da posição (ex: se statusTrade for VENDER AGORA, tende a "Vender").
 
@@ -119,12 +117,12 @@ ATENÇÃO: Nunca invente dados que não estejam claramente visíveis na tela do 
 // API Endpoint to analyze screenshots of charts
 app.post('/api/analyze', async (req, res) => {
   try {
-    const { images, dadosCompra } = req.body;
+    const { images, dadosCompra, apiKey } = req.body;
     if (!images || !Array.isArray(images) || images.length === 0) {
       return res.status(400).json({ error: 'Nenhuma imagem foi recebida para análise técnica.' });
     }
 
-    const aiInstance = getGemini();
+    const aiInstance = getGemini(apiKey);
 
     // Prepare content parts for Gemini
     const contents: any[] = [];
@@ -246,12 +244,12 @@ Para a explicação:
 
 app.post('/api/analyze-multi', async (req, res) => {
   try {
-    const { m5Image, m15Image } = req.body;
+    const { m5Image, m15Image, apiKey } = req.body;
     if (!m5Image || !m15Image) {
       return res.status(400).json({ error: 'Ambos os gráficos de M5 e M15 são obrigatórios para a análise simultânea.' });
     }
 
-    const aiInstance = getGemini();
+    const aiInstance = getGemini(apiKey);
 
     const contents: any[] = [
       { text: 'Por favor, analise simultaneamente estes dois gráficos do mesmo ativo: o primeiro é de 5 minutos (M5) e o segundo é de 15 minutos (M15). Produza uma comparação side-by-side integrando as duas perspectivas.' }

@@ -22,7 +22,7 @@ export const PRESET_CHARTS: PresetChart[] = [
       pontoEntrada: "$4,28 (esperar retração para comprar mais barato)",
       stopLoss: "$4,22 (cinto de segurança se o preço despencar)",
       alvo: "$4,38 (primeiro destino para realizar lucro)",
-      nivelConfianca: "Médio",
+      nivelConfianca: "Médio", //
       relacaoRiscoRetorno: "1:1,7 — equilibrada (ganho um pouco maior que o risco)",
       comentarioAnalista: "Se perder, você perde cerca de $0,06 até o stop; se ganhar, você ganha cerca de $0,10 até o alvo. Olá iniciante! Nunca compre quando o preço acabou de subir muito rápido e bateu no teto de $4,38. Deixe o preço cair um pouquinho perto do piso de $4,28-$4,30.",
       rompimentoDetectado: false,
@@ -62,7 +62,7 @@ export const PRESET_CHARTS: PresetChart[] = [
       pontoEntrada: "$58,50 (entrada no reteste após rompimento do piso)",
       stopLoss: "$58,85 (stop de proteção acima do reteste)",
       alvo: "$57,90 (meta para realizar lucro na queda)",
-      nivelConfianca: "Alto",
+      nivelConfianca: "Alto", //
       relacaoRiscoRetorno: "1:1,7 — viável (lucro na queda supera o risco do stop)",
       comentarioAnalista: "Quando um 'piso' forte é rompido para baixo, ele vira um 'teto'. É um conceito clássico e seguro! Não tente adivinhar fundo comprando enquanto está caindo de forma violenta. Siga o fluxo de quem está vendendo.",
       rompimentoDetectado: true,
@@ -102,7 +102,7 @@ export const PRESET_CHARTS: PresetChart[] = [
       pontoEntrada: "$34,15 (comprar perto do piso do canal)",
       stopLoss: "$33,95 (stop abaixo do piso histórico)",
       alvo: "$34,70 (realizar lucro antes do teto)",
-      nivelConfianca: "Médio",
+      nivelConfianca: "Médio", //
       relacaoRiscoRetorno: "1:3,7 — viável (lucro no teto compensa bem o stop apertado)",
       comentarioAnalista: "Operar mercados laterais exige metas rápidas. Compre no piso, venda no teto. Se uma vela gigante fechar fora dessa caixinha (rompimento), caia fora imediatamente pois significa que uma nova tendência violenta começou!",
       rompimentoDetectado: false,

@@ -12,6 +12,12 @@
   "categories": ["finance", "education"],
   "icons": [
     {
+      "src": "/icons/icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    },
+    {
       "src": "https://placehold.co/192x192/09090b/f43f5e/png?text=CS",
       "sizes": "192x192",
       "type": "image/png",
@@ -21,12 +27,6 @@
       "src": "https://placehold.co/512x512/09090b/f43f5e/png?text=CandleScan",
       "sizes": "512x512",
       "type": "image/png",
-      "purpose": "any"
-    },
-    {
-      "src": "/icons/icon.svg",
-      "sizes": "any",
-      "type": "image/svg+xml",
       "purpose": "any"
     }
   ]

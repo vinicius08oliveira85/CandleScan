@@ -28,7 +28,10 @@ import {
   FileText,
   Thermometer,
   Wallet,
-  LineChart
+  LineChart,
+  Eye,
+  EyeOff,
+  KeyRound
 } from "lucide-react";
 import { ChartAnalysis, MultiChartAnalysis, SavedAnalysis, PresetChart, BeforeInstallPromptEvent, DadosCompra } from "./types";
 import { PRESET_CHARTS, PRESET_MULTI_CHARTS } from "./data/presets";
@@ -52,7 +55,8 @@ export default function App() {
   const [selectedMultiPresetId, setSelectedMultiPresetId] = useState<string>("");
   
   const [showGlossary, setShowGlossary] = useState<boolean>(true);
-  const [activeTab, setActiveTab] = useState<"scanner" | "simulator" | "school">("scanner");
+  const [activeTab, setActiveTab] = useState<"scanner" | "simulator" | "school" | "settings">("scanner");
+  const [showSettingsTab, setShowSettingsTab] = useState(false);
   
   // Interactive Custom Candle State
   const [customCandleIsUp, setCustomCandleIsUp] = useState<boolean>(true);
@@ -77,6 +81,8 @@ export default function App() {
   const [activeHistoryId, setActiveHistoryId] = useState<string | null>(null);
   const [baselinePhotoCount, setBaselinePhotoCount] = useState(0);
   
+  const [geminiApiKey, setGeminiApiKey] = useState<string>("");
+  const [showApiKey, setShowApiKey] = useState(false);
   // Interactive full-screen preview state
   const [previewImage, setPreviewImage] = useState<string | null>(null);
   const [copiedField, setCopiedField] = useState<string | null>(null);
@@ -133,7 +139,7 @@ export default function App() {
   // Success Toast & Visual feedback state
   const [showSuccessToast, setShowSuccessToast] = useState<boolean>(false);
   const [toastMessage, setToastMessage] = useState<string>("");
-  const [toastType, setToastType] = useState<"analyze" | "preset" | "history">("analyze");
+  const [toastType, setToastType] = useState<"analyze" | "preset" | "history" | "settings">("analyze");
 
   // Automatically hide the visual success feedback toast after 5 seconds
   useEffect(() => {
@@ -146,8 +152,43 @@ export default function App() {
   }, [showSuccessToast]);
 
   useEffect(() => {
+    try {
+      const stored = localStorage.getItem("geminiApiKey");
+      if (stored) setGeminiApiKey(stored);
+    } catch {
+      /* storage indisponível */
+    }
+  }, []);
+
+  useEffect(() => {
     setHistory(loadHistoryFromStorage());
   }, []);
+
+  const handleSaveApiKey = () => {
+    const trimmed = geminiApiKey.trim();
+    try {
+      if (trimmed) {
+        localStorage.setItem("geminiApiKey", trimmed);
+      } else {
+        localStorage.removeItem("geminiApiKey");
+      }
+      setGeminiApiKey(trimmed);
+      setToastType("settings");
+      setToastMessage(
+        trimmed
+          ? "Chave API Gemini salva com sucesso no seu navegador."
+          : "Chave API removida deste dispositivo."
+      );
+      setShowSuccessToast(true);
+    } catch {
+      setAnalysisError("Não foi possível salvar a chave. Verifique as permissões do navegador.");
+    }
+  };
+
+  const openSettingsTab = () => {
+    setActiveTab("settings");
+    setShowSettingsTab(true);
+  };
 
   const parseInvestedNumber = (value: string) => {
     const n = parseFloat(value.replace(/\./g, "").replace(",", "."));
@@ -290,16 +331,21 @@ export default function App() {
     }));
     const dadosCompra = buildDadosCompra();
 
+    const trimmedKey = geminiApiKey.trim();
     const res = await fetch("/api/analyze", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ images: payloadImages, dadosCompra }),
+      body: JSON.stringify({
+        images: payloadImages,
+        dadosCompra,
+        ...(trimmedKey ? { apiKey: trimmedKey } : {}),
+      }),
     });
 
     if (!res.ok) {
       const errJson = await res.json().catch(() => ({}));
       throw new Error(
-        errJson.error ||
+        errJson.error || //
           `Erro do servidor (${res.status}). Verifique se sua chave API do Gemini está configurada.`
       );
     }
@@ -334,7 +380,7 @@ export default function App() {
       console.error(err);
       setAnalysisError(
         err.message ||
-          "Ocorreu um erro ao processar. Verifique se a sua chave do Gemini está salva corretamente nas Configurações > Segredos."
+          "Ocorreu um erro ao processar. Configure sua chave do Gemini na aba Configurações."
       );
     } finally {
       setIsAnalyzing(false);
@@ -588,24 +634,29 @@ export default function App() {
     const entry = parsePrice(entryStr);
     const stop = parsePrice(stopStr);
     const target = parsePrice(targetStr);
-    if (entry === null || stop === null || target === null) return null;
+
+    if (entry === null || stop === null || target === null || entry === stop) {
+      return null;
+    }
 
     const isSell = action.toLowerCase().includes("vender");
     const riskAmount = isSell ? Math.abs(stop - entry) : Math.abs(entry - stop);
     const rewardAmount = isSell ? Math.abs(entry - target) : Math.abs(target - entry);
+
     if (riskAmount <= 0) return null;
 
     const ratio = rewardAmount / riskAmount;
     let viability: "viável" | "equilibrada" | "fraca" = "equilibrada";
-    if (ratio >= 1.5) viability = "viável";
-    else if (ratio < 1) viability = "fraca";
+
+    if (ratio >= 2.0) viability = "viável";
+    else if (ratio < 1.0) viability = "fraca";
 
     return {
       ratio,
       riskAmount,
       rewardAmount,
       viability,
-      label: `1:${ratio.toFixed(1).replace(".", ",")} — ${viability}`,
+      label: `Relação 1:${ratio.toFixed(2).replace(".", ",")} (${viability.toUpperCase()})`,
     };
   };
 
@@ -616,7 +667,7 @@ export default function App() {
       activeAnalysis.alvo,
       activeAnalysis.acaoRecomendada
     );
-    if (computed) return computed.ratio;
+    if (computed?.ratio != null) return computed.ratio;
     const match = activeAnalysis.relacaoRiscoRetorno?.match(/1\s*:\s*([\d,]+)/i);
     if (match) {
       const parsed = parseFloat(match[1].replace(",", "."));
@@ -647,7 +698,7 @@ export default function App() {
       activeAnalysis.acaoRecomendada
     );
 
-    if (ratio !== null && ratio > 2.0) {
+    if (ratio !== null && ratio >= 2.0) {
       return {
         label: "OPERAÇÃO ALTAMENTE VIÁVEL",
         sublabel: computed
@@ -1406,6 +1457,20 @@ CandleScan FÁCIL • Análise didática com IA — use sempre stop loss.
               <BookOpen className="h-3.5 w-3.5" />
               {activeTab === "school" ? "Ir para o Scanner" : "📚 Guia do Iniciante"}
             </button>
+
+            <button
+              type="button"
+              onClick={openSettingsTab}
+              className={`px-3.5 py-1.5 flex items-center gap-1.5 rounded-lg text-xs font-semibold active:scale-95 transition-all text-center border cursor-pointer ${
+                activeTab === "settings"
+                  ? "bg-zinc-700/50 border-zinc-500 text-white"
+                  : "bg-[#18181b] border-[#27272a] text-[#a1a1aa] hover:border-zinc-500 hover:text-white"
+              }`}
+              title="Chave API Gemini"
+            >
+              <KeyRound className="h-3.5 w-3.5" />
+              Configurações
+            </button>
             
             <button
               id="reset-btn"
@@ -1442,7 +1507,10 @@ CandleScan FÁCIL • Análise didática com IA — use sempre stop loss.
         {/* TAB NAVIGATION SELECTOR */}
         <div className="flex border-b border-zinc-800 gap-1 overflow-x-auto scroller-none pb-px">
           <button
-            onClick={() => setActiveTab("scanner")}
+            onClick={() => {
+              setActiveTab("scanner");
+              setShowSettingsTab(false);
+            }}
             className={`py-3 px-6 text-xs sm:text-sm font-extrabold border-b-2 flex items-center gap-2 select-none cursor-pointer whitespace-nowrap transition-all uppercase tracking-wider ${
               activeTab === "scanner"
                 ? "border-rose-500 text-rose-450 bg-rose-500/[0.04]"
@@ -1454,7 +1522,10 @@ CandleScan FÁCIL • Análise didática com IA — use sempre stop loss.
           </button>
           
           <button
-            onClick={() => setActiveTab("simulator")}
+            onClick={() => {
+              setActiveTab("simulator");
+              setShowSettingsTab(false);
+            }}
             className={`py-3 px-6 text-xs sm:text-sm font-extrabold border-b-2 flex items-center gap-2 select-none cursor-pointer whitespace-nowrap transition-all uppercase tracking-wider ${
               activeTab === "simulator"
                 ? "border-rose-500 text-rose-450 bg-rose-500/[0.04]"
@@ -1466,7 +1537,10 @@ CandleScan FÁCIL • Análise didática com IA — use sempre stop loss.
           </button>
           
           <button
-            onClick={() => setActiveTab("school")}
+            onClick={() => {
+              setActiveTab("school");
+              setShowSettingsTab(false);
+            }}
             className={`py-3 px-6 text-xs sm:text-sm font-extrabold border-b-2 flex items-center gap-2 select-none cursor-pointer whitespace-nowrap transition-all uppercase tracking-wider ${
               activeTab === "school"
                 ? "border-rose-500 text-rose-450 bg-rose-500/[0.04]"
@@ -1476,7 +1550,95 @@ CandleScan FÁCIL • Análise didática com IA — use sempre stop loss.
             <BookOpen className="h-4 w-4" />
             📚 Escola de Trading
           </button>
+
+          <button
+            onClick={openSettingsTab}
+            className={`py-3 px-6 text-xs sm:text-sm font-extrabold border-b-2 flex items-center gap-2 select-none cursor-pointer whitespace-nowrap transition-all uppercase tracking-wider ${
+              activeTab === "settings" || showSettingsTab
+                ? "border-rose-500 text-rose-450 bg-rose-500/[0.04]"
+                : "border-transparent text-zinc-400 hover:text-zinc-200 hover:border-zinc-700"
+            }`}
+          >
+            <Sliders className="h-4 w-4" />
+            ⚙️ Configurações
+          </button>
         </div>
+
+      {/* TAB: CONFIGURAÇÕES */}
+      {activeTab === "settings" && (
+        <div id="settings-tab" className="bg-[#18181b] border border-[#27272a] rounded-2xl p-5 md:p-6 space-y-5 transition-all">
+          <div className="flex items-center gap-3">
+            <span className="p-2.5 rounded-xl bg-rose-500/10 border border-rose-500/40">
+              <KeyRound className="h-5 w-5 text-rose-400" />
+            </span>
+            <div>
+              <h3 className="font-extrabold text-base text-white">Configurações</h3>
+              <p className="text-xs text-[#a1a1aa] mt-0.5">
+                Chave API Gemini — armazenada somente neste navegador (localStorage).
+              </p>
+            </div>
+          </div>
+
+          <div className="rounded-xl border border-zinc-800 bg-[#111112] p-4 space-y-4">
+            <label className="block space-y-1.5">
+              <span className="text-[11px] font-semibold uppercase tracking-wide text-zinc-400">
+                Chave API Gemini
+              </span>
+              <div className="relative">
+                <input
+                  type={showApiKey ? "text" : "password"}
+                  autoComplete="off"
+                  spellCheck={false}
+                  placeholder="Cole sua chave (ex: AIza...)"
+                  value={geminiApiKey}
+                  onChange={(e) => setGeminiApiKey(e.target.value)}
+                  className="w-full bg-[#09090b] border border-zinc-800 rounded-lg px-3 py-2.5 pr-10 text-sm font-mono text-white placeholder:text-zinc-600 focus:border-rose-500/60 focus:outline-none"
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowApiKey((v) => !v)}
+                  className="absolute right-2 top-1/2 -translate-y-1/2 p-1.5 text-zinc-500 hover:text-zinc-300 rounded"
+                  aria-label={showApiKey ? "Ocultar chave" : "Mostrar chave"}
+                >
+                  {showApiKey ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                </button>
+              </div>
+            </label>
+
+            <p className="text-[11px] text-zinc-500 leading-relaxed">
+              A chave é enviada apenas nas requisições de análise para o seu servidor e tem prioridade
+              sobre a variável de ambiente do backend. Nunca compartilhe a chave em prints ou redes
+              sociais. Crie ou revogue chaves em{" "}
+              <a
+                href="https://aistudio.google.com/app/apikey"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-rose-400 hover:underline"
+              >
+                Google AI Studio
+              </a>
+              . Se o servidor já tiver <code className="text-zinc-400">GEMINI_API_KEY</code>, você pode
+              deixar em branco aqui.
+            </p>
+
+            <div className="flex flex-wrap gap-2">
+              <button
+                type="button"
+                onClick={handleSaveApiKey}
+                className="py-2.5 px-5 rounded-xl font-bold text-sm tracking-wide transition-all shadow flex items-center justify-center gap-2 bg-rose-500 hover:bg-rose-600 text-white active:scale-95"
+              >
+                <CheckCircle className="h-4 w-4" />
+                Salvar Chave API
+              </button>
+              {geminiApiKey.trim() && (
+                <span className="text-[10px] self-center text-emerald-400/90 font-mono">
+                  ● chave preenchida
+                </span>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
 
         {/* TAB 1: SCANNER CORE (TOP BANNER) */}
         {activeTab === "scanner" && (
@@ -3044,7 +3206,13 @@ CandleScan FÁCIL • Análise didática com IA — use sempre stop loss.
           <div className="flex-1 min-w-0 text-left">
             <div className="flex items-center justify-between">
               <span className="text-xs font-bold text-emerald-400 uppercase tracking-widest font-mono">
-                {toastType === "analyze" ? "⚡ Análise Concluída" : toastType === "preset" ? "🎓 Exemplo Carregado" : "📂 Histórico Carregado"}
+                {toastType === "analyze"
+                  ? "⚡ Análise Concluída"
+                  : toastType === "preset"
+                  ? "🎓 Exemplo Carregado"
+                  : toastType === "settings"
+                  ? "⚙️ Configurações"
+                  : "📂 Histórico Carregado"}
               </span>
               <button 
                 onClick={() => setShowSuccessToast(false)} 
