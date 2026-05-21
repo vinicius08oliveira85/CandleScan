@@ -97,12 +97,29 @@ Siga rigorosamente estas diretrizes ao analisar a imagem do gráfico:
    - Formato curto: "1:X — [viável / equilibrada / fraca]" com base na distância entre entrada, stop e alvo visíveis no gráfico.
    - Exemplo: "1:2,3 — viável (ganho maior que o risco)" ou "1:0,8 — fraca (risco maior que o ganho)".
 
+MODO GERENTE DE TRADE (quando o usuário informar dadosCompra com precoEntrada e quantidade):
+- Você deixa de ser apenas analista e passa a ser GERENTE DE TRADE da posição já aberta.
+- Compare o gráfico ATUAL (último print, se houver vários) com o preço que o investidor PAGOU (precoEntrada).
+- Leia precoAtualEstimado do eixo ou do último candle visível no print mais recente.
+- Defina statusTrade com UMA destas opções exatas: "MANTER", "VENDER AGORA", "REALIZAR PARCIAL" ou "STOP ATIVADO".
+  - MANTER: tendência ainda favorável e preço acima do stop sugerido.
+  - VENDER AGORA: sinais técnicos de fraqueza, reversão ou alvo atingido.
+  - REALIZAR PARCIAL: lucro parcial bom, mas ainda há espaço — sugira travar parte do ganho.
+  - STOP ATIVADO: preço rompeu ou está muito próximo do stop loss da operação.
+- No comentarioAnalista, OBRIGATÓRIO incluir frase no formato:
+  "Você comprou a [precoEntrada formatado], o preço está em [precoAtualEstimado]. Seu lucro/prejuízo atual é de [valor aproximado em R$ ou %]. Recomendo [statusTrade em linguagem simples] porque [motivo técnico lúdico]."
+- acaoRecomendada deve refletir a gestão da posição (ex: se statusTrade for VENDER AGORA, tende a "Vender").
+
+EVOLUÇÃO DE PRINTS (múltiplas imagens em ordem):
+- As imagens chegam em ORDEM CRONOLÓGICA: a primeira é o passado, a última é o AGORA.
+- Descreva brevemente como o preço evoluiu entre os prints antes de dar a recomendação final.
+
 ATENÇÃO: Nunca invente dados que não estejam claramente visíveis na tela do gráfico. Use uma comunicação calorosa, empática, parecendo um professor paciente ensinando uma pessoa querida do zero.`;
 
 // API Endpoint to analyze screenshots of charts
 app.post('/api/analyze', async (req, res) => {
   try {
-    const { images } = req.body;
+    const { images, dadosCompra } = req.body;
     if (!images || !Array.isArray(images) || images.length === 0) {
       return res.status(400).json({ error: 'Nenhuma imagem foi recebida para análise técnica.' });
     }
@@ -115,7 +132,10 @@ app.post('/api/analyze', async (req, res) => {
     // Add text prompt giving instructions and context
     let promptText = 'Por favor, faça uma análise técnica minuciosa deste gráfico de candles enviado. ';
     if (images.length > 1) {
-      promptText += 'Você recebeu múltiplos tempos gráficos para analisar em conjunto. Analise todos e compare-os.';
+      promptText += `Você recebeu ${images.length} prints do MESMO ativo em ORDEM CRONOLÓGICA (do mais antigo ao mais recente). O ÚLTIMO print é o momento ATUAL do mercado. Compare a evolução do preço entre eles antes de recomendar.`;
+    }
+    if (dadosCompra?.precoEntrada && dadosCompra?.quantidade) {
+      promptText += ` MODO GERENTE DE TRADE ATIVO: o investidor comprou a ${dadosCompra.precoEntrada} com quantidade ${dadosCompra.quantidade}. Compare o gráfico atual com esse preço pago, preencha statusTrade e use o formato obrigatório no comentarioAnalista.`;
     }
     contents.push({ text: promptText });
 
@@ -161,7 +181,9 @@ app.post('/api/analyze', async (req, res) => {
             alvo: { type: Type.STRING, description: 'Take profit no formato "R$ X,XX" ou "$X.XX" seguido de explicação opcional entre parênteses' },
             nivelConfianca: { type: Type.STRING, description: 'Baixo, Médio ou Alto — baseado principalmente na nitidez visual dos candles e legibilidade dos preços na imagem' },
             relacaoRiscoRetorno: { type: Type.STRING, description: 'Relação risco/retorno estimada no formato "1:X — viável/equilibrada/fraca" com breve justificativa lúdica' },
-            comentarioAnalista: { type: Type.STRING, description: 'Conselho do mentor priorizando SEGURANÇA DO VALOR. OBRIGATÓRIO incluir: "Se perder, você perde X; se ganhar, você ganha Y" (valores aproximados com base em entrada, stop e alvo)' },
+            comentarioAnalista: { type: Type.STRING, description: 'Conselho do mentor. Sem posição: incluir "Se perder, você perde X; se ganhar, você ganha Y". Com dadosCompra: "Você comprou a X, o preço está em Y. Seu lucro/prejuízo atual é Z. Recomendo [ação] porque [motivo técnico]"' },
+            precoAtualEstimado: { type: Type.STRING, description: 'Preço atual do ativo no print mais recente, formato "R$ X,XX" ou "$X.XX"' },
+            statusTrade: { type: Type.STRING, description: 'Somente com posição aberta: "MANTER", "VENDER AGORA", "REALIZAR PARCIAL" ou "STOP ATIVADO"' },
             syntheticCandles: { 
               type: Type.ARRAY, 
               items: {

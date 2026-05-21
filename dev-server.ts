@@ -79,12 +79,17 @@ Siga rigorosamente estas diretrizes ao analisar a imagem do gráfico:
 11. Formatação de Preços (pontoEntrada, stopLoss, alvo) — VALOR NUMÉRICO PURO primeiro, explicação lúdica entre parênteses depois.
 12. relacaoRiscoRetorno — formato "1:X — viável/equilibrada/fraca" com base em entrada, stop e alvo.
 
+MODO GERENTE DE TRADE (quando dadosCompra com precoEntrada e quantidade):
+- Compare o gráfico ATUAL com o preço pago. statusTrade: "MANTER", "VENDER AGORA", "REALIZAR PARCIAL" ou "STOP ATIVADO".
+- comentarioAnalista: "Você comprou a X, o preço está em Y. Seu lucro/prejuízo atual é Z. Recomendo [ação] porque [motivo técnico]."
+- Múltiplos prints: ordem cronológica; o último é o momento atual.
+
 ATENÇÃO: Nunca invente dados que não estejam claramente visíveis na tela do gráfico. Use uma comunicação calorosa, empática, parecendo um professor paciente ensinando uma pessoa querida do zero.`;
 
 // API Endpoint to analyze screenshots of charts
 app.post('/api/analyze', async (req, res) => {
   try {
-    const { images } = req.body;
+    const { images, dadosCompra } = req.body;
     if (!images || !Array.isArray(images) || images.length === 0) {
       return res.status(400).json({ error: 'Nenhuma imagem foi recebida para análise técnica.' });
     }
@@ -97,7 +102,10 @@ app.post('/api/analyze', async (req, res) => {
     // Add text prompt giving instructions and context
     let promptText = 'Por favor, faça uma análise técnica minuciosa deste gráfico de candles enviado. ';
     if (images.length > 1) {
-      promptText += 'Você recebeu múltiplos tempos gráficos para analisar em conjunto. Analise todos e compare-os.';
+      promptText += `Você recebeu ${images.length} prints em ORDEM CRONOLÓGICA. O último é o momento ATUAL. Compare a evolução do preço.`;
+    }
+    if (dadosCompra?.precoEntrada && dadosCompra?.quantidade) {
+      promptText += ` MODO GERENTE DE TRADE: comprou a ${dadosCompra.precoEntrada}, quantidade ${dadosCompra.quantidade}. Preencha statusTrade e comentarioAnalista no formato obrigatório.`;
     }
     contents.push({ text: promptText });
 
@@ -143,7 +151,9 @@ app.post('/api/analyze', async (req, res) => {
             alvo: { type: Type.STRING, description: 'Alvo ideal de saída (Take Profit)' },
             nivelConfianca: { type: Type.STRING, description: 'Baixo, Médio ou Alto — baseado na nitidez visual dos candles na imagem' },
             relacaoRiscoRetorno: { type: Type.STRING, description: 'Relação risco/retorno no formato "1:X — viável/equilibrada/fraca"' },
-            comentarioAnalista: { type: Type.STRING, description: 'Um comentário do mentor direto para o trader sobre armadilhas locais ou gestão de risco' },
+            comentarioAnalista: { type: Type.STRING, description: 'Mentor: com posição aberta use "Você comprou a X, o preço está em Y. Lucro/prejuízo Z. Recomendo..."' },
+            precoAtualEstimado: { type: Type.STRING, description: 'Preço atual no print mais recente (R$ ou $)' },
+            statusTrade: { type: Type.STRING, description: '"MANTER", "VENDER AGORA", "REALIZAR PARCIAL" ou "STOP ATIVADO"' },
             syntheticCandles: { 
               type: Type.ARRAY, 
               items: {

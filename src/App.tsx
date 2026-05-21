@@ -26,14 +26,19 @@ import {
   Image as ImageIcon,
   CheckCircle,
   FileText,
-  Thermometer
+  Thermometer,
+  Wallet,
+  LineChart
 } from "lucide-react";
-import { ChartAnalysis, MultiChartAnalysis, SavedAnalysis, PresetChart, BeforeInstallPromptEvent } from "./types";
+import { ChartAnalysis, MultiChartAnalysis, SavedAnalysis, PresetChart, BeforeInstallPromptEvent, DadosCompra } from "./types";
 import { PRESET_CHARTS, PRESET_MULTI_CHARTS } from "./data/presets";
 import {
   loadHistoryFromStorage,
   persistHistoryToStorage,
   MAX_HISTORY_WITH_PHOTOS,
+  photosToSavedImages,
+  buildEvolutionSnapshot,
+  mergeHistoryAnalysis,
 } from "./historyStorage";
 import { motion } from "motion/react";
 
@@ -65,6 +70,12 @@ export default function App() {
   
   // Saved scans history
   const [history, setHistory] = useState<SavedAnalysis[]>([]);
+
+  // Acompanhamento de trade vivo
+  const [investedPrice, setInvestedPrice] = useState<string>("");
+  const [investedAmount, setInvestedAmount] = useState<string>("");
+  const [activeHistoryId, setActiveHistoryId] = useState<string | null>(null);
+  const [baselinePhotoCount, setBaselinePhotoCount] = useState(0);
   
   // Interactive full-screen preview state
   const [previewImage, setPreviewImage] = useState<string | null>(null);
@@ -138,16 +149,55 @@ export default function App() {
     setHistory(loadHistoryFromStorage());
   }, []);
 
-  const saveToHistory = (
+  const parseInvestedNumber = (value: string) => {
+    const n = parseFloat(value.replace(/\./g, "").replace(",", "."));
+    return isNaN(n) ? 0 : n;
+  };
+
+  const buildDadosCompra = (): DadosCompra | undefined => {
+    const precoEntrada = parseInvestedNumber(investedPrice);
+    const valorTotal = parseInvestedNumber(investedAmount);
+    if (precoEntrada <= 0 || valorTotal <= 0) return undefined;
+    return { precoEntrada, quantidade: valorTotal / precoEntrada };
+  };
+
+  const getValorInvestidoTotal = () => parseInvestedNumber(investedAmount);
+
+  const persistAnalysisToHistory = (
     newAnalysis: ChartAnalysis,
-    photos: { name: string; type: string; base64: string }[]
+    photos: { name: string; type: string; base64: string }[],
+    evolutionOnlyPhotos: { name: string; type: string; base64: string }[] | null
   ) => {
+    const dadosCompra = buildDadosCompra();
+    const valorInvestidoTotal = getValorInvestidoTotal() || undefined;
+    const savedImages = photosToSavedImages(photos);
+
+    if (activeHistoryId) {
+      const existing = history.find((h) => h.id === activeHistoryId);
+      if (!existing) return;
+      const merged = mergeHistoryAnalysis(
+        existing,
+        newAnalysis,
+        photos,
+        dadosCompra,
+        valorInvestidoTotal,
+        evolutionOnlyPhotos
+      );
+      const updated = persistHistoryToStorage(
+        history.map((h) => (h.id === activeHistoryId ? merged : h))
+      );
+      setHistory(updated);
+      setBaselinePhotoCount(merged.previewImages?.length ?? photos.length);
+      return;
+    }
+
     const record: SavedAnalysis = {
       id: crypto.randomUUID ? crypto.randomUUID() : Date.now().toString(),
       timestamp:
         new Date().toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" }) +
         " - " +
         new Date().toLocaleDateString("pt-BR"),
+      lastUpdatedAt: new Date().toLocaleString("pt-BR"),
       ativoCooptado: newAnalysis.ativoCooptado || "Ativo Desconhecido",
       tempoGrafico: newAnalysis.tempoGrafico || "Desconhecido",
       tendencia: newAnalysis.tendencia || "Lateral",
@@ -155,15 +205,19 @@ export default function App() {
       nivelConfianca: newAnalysis.nivelConfianca || "Médio",
       analysis: newAnalysis,
       imageCount: photos.length,
-      previewImages: photos.map((p) => ({
-        name: p.name,
-        mimeType: p.type,
-        base64: p.base64,
-      })),
+      previewImages: savedImages,
+      evolutionSnapshots: [buildEvolutionSnapshot(photos, "Print inicial")],
+      dadosCompra,
+      valorInvestidoTotal,
+      isLiveTrade: !!dadosCompra,
     };
 
     const updated = persistHistoryToStorage([record, ...history]);
     setHistory(updated);
+    if (dadosCompra) {
+      setActiveHistoryId(record.id);
+      setBaselinePhotoCount(photos.length);
+    }
   };
 
   // Helper to handle copies
@@ -227,7 +281,44 @@ export default function App() {
     setUploadedPhotos(prev => prev.filter(p => p.id !== id));
   };
 
-  // Start analysis using Gemini API on backend
+  const requestChartAnalysis = async (
+    evolutionOnlyPhotos: { name: string; type: string; base64: string }[] | null
+  ) => {
+    const payloadImages = uploadedPhotos.map((photo) => ({
+      data: photo.base64,
+      mimeType: photo.type,
+    }));
+    const dadosCompra = buildDadosCompra();
+
+    const res = await fetch("/api/analyze", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ images: payloadImages, dadosCompra }),
+    });
+
+    if (!res.ok) {
+      const errJson = await res.json().catch(() => ({}));
+      throw new Error(
+        errJson.error ||
+          `Erro do servidor (${res.status}). Verifique se sua chave API do Gemini está configurada.`
+      );
+    }
+
+    const data: ChartAnalysis = await res.json();
+    setActiveAnalysis(data);
+    setSelectedPresetId("");
+    persistAnalysisToHistory(data, uploadedPhotos, evolutionOnlyPhotos);
+
+    const isEvolution = !!evolutionOnlyPhotos?.length;
+    setToastType(isEvolution ? "history" : "analyze");
+    setToastMessage(
+      dadosCompra
+        ? `Trade vivo atualizado: ${data.ativoCooptado || "Ativo"} — ${data.statusTrade || "análise concluída"}`
+        : `Análise inteligente para o ativo ${data.ativoCooptado || "Detectado"} concluída com sucesso!`
+    );
+    setShowSuccessToast(true);
+  };
+
   const handleAnalyzeGraph = async () => {
     if (uploadedPhotos.length === 0) {
       setAnalysisError("Por favor, faça upload de pelo menos um print de gráfico (M5 ou M15) antes de analisar.");
@@ -238,46 +329,53 @@ export default function App() {
     setAnalysisError(null);
 
     try {
-      // Prepare body payload matching server.ts schema
-      const payloadImages = uploadedPhotos.map(photo => ({
-        data: photo.base64,
-        mimeType: photo.type
-      }));
-
-      const res = await fetch("/api/analyze", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json"
-        },
-        body: JSON.stringify({ images: payloadImages })
-      });
-
-      if (!res.ok) {
-        const errJson = await res.json().catch(() => ({}));
-        throw new Error(errJson.error || `Erro do servidor (${res.status}). Verifique se sua chave API do Gemini está configurada.`);
-      }
-
-      const data: ChartAnalysis = await res.json();
-      setActiveAnalysis(data);
-      setSelectedPresetId(""); // Clear active preset flag
-      saveToHistory(data, uploadedPhotos);
-      
-      // Trigger success visual feedback toast
-      setToastType("analyze");
-      setToastMessage(`Análise inteligente para o ativo ${data.ativoCooptado || "Detectado"} concluída e gerada com sucesso!`);
-      setShowSuccessToast(true);
+      await requestChartAnalysis(null);
     } catch (err: any) {
       console.error(err);
-      setAnalysisError(err.message || "Ocorreu um erro ao processar. Verifique se a sua chave do Gemini está salva corretamente nas Configurações > Segredos.");
+      setAnalysisError(
+        err.message ||
+          "Ocorreu um erro ao processar. Verifique se a sua chave do Gemini está salva corretamente nas Configurações > Segredos."
+      );
     } finally {
       setIsAnalyzing(false);
     }
   };
 
+  const handleUpdateWithNewPrint = async () => {
+    if (!activeHistoryId) {
+      setAnalysisError("Abra uma análise do histórico para continuar o acompanhamento do trade.");
+      return;
+    }
+    if (uploadedPhotos.length <= baselinePhotoCount) {
+      setAnalysisError("Adicione pelo menos um novo print antes de atualizar a evolução.");
+      return;
+    }
+
+    const newPhotos = uploadedPhotos.slice(baselinePhotoCount);
+    setIsAnalyzing(true);
+    setAnalysisError(null);
+
+    try {
+      await requestChartAnalysis(newPhotos);
+    } catch (err: any) {
+      console.error(err);
+      setAnalysisError(err.message || "Erro ao atualizar o trade com o novo print.");
+    } finally {
+      setIsAnalyzing(false);
+    }
+  };
+
+  const hasNewEvolutionPhotos =
+    !!activeHistoryId && uploadedPhotos.length > baselinePhotoCount;
+
   // Clear current upload and fall back to default
   const handleResetWorkspace = () => {
     setUploadedPhotos([]);
     setAnalysisError(null);
+    setActiveHistoryId(null);
+    setBaselinePhotoCount(0);
+    setInvestedPrice("");
+    setInvestedAmount("");
     const defaultPreset = PRESET_CHARTS[0];
     setActiveAnalysis(defaultPreset.analysis);
     setSelectedPresetId(defaultPreset.id);
@@ -287,6 +385,8 @@ export default function App() {
     setActiveAnalysis(preset.analysis);
     setSelectedPresetId(preset.id);
     setUploadedPhotos([]);
+    setActiveHistoryId(null);
+    setBaselinePhotoCount(0);
     setAnalysisError(null);
 
     // Trigger feedback for presets
@@ -299,6 +399,7 @@ export default function App() {
     setActiveAnalysis(item.analysis);
     setSelectedPresetId("");
     setAnalysisError(null);
+    setActiveHistoryId(item.id);
 
     if (item.previewImages?.length) {
       setUploadedPhotos(
@@ -309,13 +410,26 @@ export default function App() {
           base64: img.base64,
         }))
       );
+      setBaselinePhotoCount(item.previewImages.length);
     } else {
       setUploadedPhotos([]);
+      setBaselinePhotoCount(0);
+    }
+
+    if (item.dadosCompra) {
+      setInvestedPrice(String(item.dadosCompra.precoEntrada));
+      const total =
+        item.valorInvestidoTotal ??
+        item.dadosCompra.precoEntrada * item.dadosCompra.quantidade;
+      setInvestedAmount(String(total));
     }
 
     setToastType("history");
+    const snapCount = item.evolutionSnapshots?.length ?? item.previewImages?.length ?? 0;
     setToastMessage(
-      item.previewImages?.length
+      item.isLiveTrade
+        ? `Trade vivo restaurado (${snapCount} momento(s)). Adicione um novo print e clique em "Atualizar com novo Print".`
+        : item.previewImages?.length
         ? `Análise e ${item.previewImages.length} print(s) restaurados do histórico offline!`
         : `Análise gravada para o ativo ${item.analysis.ativoCooptado || "Histórico"} restaurada!`
     );
@@ -569,6 +683,67 @@ export default function App() {
   };
 
   const operationViability = getOperationViability();
+
+  const computeROI = (currentPrice: number, buyPrice: number, amount: number) => {
+    if (!buyPrice || !currentPrice || !amount) return null;
+    const profitPerUnit = currentPrice - buyPrice;
+    const totalProfit = profitPerUnit * amount;
+    const percentage = (profitPerUnit / buyPrice) * 100;
+    return {
+      totalProfit,
+      percentage,
+      isPositive: totalProfit >= 0,
+    };
+  };
+
+  const getCurrentMarketPrice = (): number | null => {
+    const fromAi = parsePrice(activeAnalysis.precoAtualEstimado || "");
+    if (fromAi !== null) return fromAi;
+    const candles = activeAnalysis.syntheticCandles;
+    if (candles?.length) return candles[candles.length - 1].close;
+    return parsePrice(activeAnalysis.pontoEntrada);
+  };
+
+  const isPositioned = () => !!buildDadosCompra();
+
+  const liveRoi = () => {
+    const dados = buildDadosCompra();
+    const current = getCurrentMarketPrice();
+    if (!dados || current === null) return null;
+    return computeROI(current, dados.precoEntrada, dados.quantidade);
+  };
+
+  const roiData = liveRoi();
+
+  const getTradeStatusDisplay = (status?: string) => {
+    const s = (status || activeAnalysis.statusTrade || "").toUpperCase();
+    if (s.includes("VENDER") || s.includes("STOP")) {
+      return {
+        label: "HORA DE SAIR",
+        className:
+          "bg-orange-500/20 border-2 border-orange-500 text-orange-300 shadow-[0_0_24px_rgba(249,115,22,0.55)]",
+        pulse: true,
+      };
+    }
+    if (s.includes("PARCIAL")) {
+      return {
+        label: "REALIZAR PARCIAL",
+        className:
+          "bg-amber-500/20 border-2 border-amber-500 text-amber-300 shadow-[0_0_18px_rgba(245,158,11,0.45)]",
+        pulse: false,
+      };
+    }
+    return {
+      label: "MANTENHA A POSIÇÃO",
+      className:
+        "bg-sky-500/20 border-2 border-sky-400 text-sky-200 shadow-[0_0_24px_rgba(56,189,248,0.5)]",
+      pulse: false,
+    };
+  };
+
+  const tradeStatusBadge = isPositioned()
+    ? getTradeStatusDisplay(activeAnalysis.statusTrade)
+    : null;
 
   const CANDLE_PATTERN_BADGES: { pattern: RegExp; label: string; className: string; inlineClass: string }[] = [
     { pattern: /\bmartelo\b/gi, label: "Martelo", className: "bg-amber-500/25 text-amber-200 border-amber-400/60 shadow-[0_0_8px_rgba(245,158,11,0.25)]", inlineClass: "bg-amber-500/20 text-amber-200 border border-amber-400/50 rounded px-1 py-0.5 font-bold" },
@@ -1092,6 +1267,19 @@ export default function App() {
       : "";
 
     const rr = activeAnalysis.relacaoRiscoRetorno || getRiskRewardDisplay();
+    const dados = buildDadosCompra();
+    const roi = liveRoi();
+    const tradeBlock =
+      dados && roi
+        ? `--------------------------------------------------
+ACOMPANHAMENTO DE TRADE VIVO
+• Preço de compra: R$ ${dados.precoEntrada.toFixed(2)}
+• Valor investido: R$ ${getValorInvestidoTotal().toFixed(2)}
+• Preço atual (est.): ${activeAnalysis.precoAtualEstimado || getCurrentMarketPrice()}
+• Lucro/Prejuízo: R$ ${roi.totalProfit.toFixed(2)} (${roi.percentage.toFixed(2)}%)
+• Status IA: ${activeAnalysis.statusTrade || "—"}
+`
+        : "";
 
     return `=== CANDLESCAN FÁCIL — RELATÓRIO DE ANÁLISE TÉCNICA ===
 Gerado em: ${new Date().toLocaleString("pt-BR")}
@@ -1103,7 +1291,7 @@ MOMENTO: ${activeAnalysis.momento}
 RECOMENDAÇÃO: ${activeAnalysis.acaoRecomendada.toUpperCase()}
 CONFIANÇA: ${activeAnalysis.nivelConfianca}
 RISCO/RETORNO: ${rr}${rompimentoText}
---------------------------------------------------
+${tradeBlock}--------------------------------------------------
 TICKET DE OPERAÇÃO
 • Entrada: ${activeAnalysis.pontoEntrada}
 • Stop (Segurança): ${activeAnalysis.stopLoss}
@@ -1794,6 +1982,77 @@ CandleScan FÁCIL • Análise didática com IA — use sempre stop loss.
           <>
             {/* INPUT AND PRESETS CONTROLS BLOCK */}
             <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
+
+          {/* Dados do investimento — acompanhamento de trade vivo */}
+          <div
+            id="card-investment"
+            className="lg:col-span-12 bg-[#18181b] border border-[#27272a] rounded-2xl p-5 md:p-6 space-y-4"
+          >
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div className="flex items-center gap-2">
+                <span className="p-2 rounded-lg bg-sky-500/15 border border-sky-500/40">
+                  <Wallet className="h-4 w-4 text-sky-400" />
+                </span>
+                <div>
+                  <h3 className="font-bold text-sm tracking-widest uppercase text-[#a1a1aa]">
+                    Dados do Meu Investimento
+                  </h3>
+                  <p className="text-[11px] text-zinc-500 mt-0.5">
+                    Preencha para a IA agir como gerente do seu trade (lucro/prejuízo em tempo real).
+                  </p>
+                </div>
+              </div>
+              {activeHistoryId && (
+                <span className="text-[10px] font-bold uppercase tracking-wider px-2.5 py-1 rounded-full bg-sky-500/15 border border-sky-500/40 text-sky-300">
+                  Sessão de acompanhamento ativa
+                </span>
+              )}
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <label className="space-y-1.5">
+                <span className="text-[11px] font-semibold uppercase tracking-wide text-zinc-400">
+                  Preço de Compra (por papel)
+                </span>
+                <input
+                  type="text"
+                  inputMode="decimal"
+                  placeholder="Ex: 4,28"
+                  value={investedPrice}
+                  onChange={(e) => setInvestedPrice(e.target.value)}
+                  className="w-full bg-[#111112] border border-zinc-800 rounded-lg px-3 py-2.5 text-sm font-mono text-white placeholder:text-zinc-600 focus:border-sky-500/60 focus:outline-none"
+                />
+              </label>
+              <label className="space-y-1.5">
+                <span className="text-[11px] font-semibold uppercase tracking-wide text-zinc-400">
+                  Valor Investido (total R$)
+                </span>
+                <input
+                  type="text"
+                  inputMode="decimal"
+                  placeholder="Ex: 1000"
+                  value={investedAmount}
+                  onChange={(e) => setInvestedAmount(e.target.value)}
+                  className="w-full bg-[#111112] border border-zinc-800 rounded-lg px-3 py-2.5 text-sm font-mono text-white placeholder:text-zinc-600 focus:border-sky-500/60 focus:outline-none"
+                />
+              </label>
+            </div>
+
+            {isPositioned() && buildDadosCompra() && (
+              <p className="text-[11px] text-zinc-500 font-mono">
+                Quantidade estimada:{" "}
+                <strong className="text-sky-300">
+                  {buildDadosCompra()!.quantidade.toFixed(4)} papéis
+                </strong>
+                {uploadedPhotos.length > 1 && (
+                  <span className="text-zinc-600">
+                    {" "}
+                    · {uploadedPhotos.length} prints na evolução
+                  </span>
+                )}
+              </p>
+            )}
+          </div>
           
           {/* DRAG-AND-DROP UPLOAD & PRESET CARD (width: col-span-7) */}
           <div id="card-uploader" className="lg:col-span-12 xl:col-span-8 bg-[#18181b] border border-[#27272a] rounded-2xl p-5 md:p-6 flex flex-col justify-between space-y-5 transition-all">
@@ -1914,6 +2173,9 @@ CandleScan FÁCIL • Análise didática com IA — use sempre stop loss.
                         <div className="flex items-center justify-between mt-1.5">
                           <span className="text-[10px] text-zinc-400 truncate max-w-[80%]" title={photo.name}>
                             {index + 1}. {photo.name}
+                            {activeHistoryId && index >= baselinePhotoCount && (
+                              <span className="text-sky-400 ml-1">· novo</span>
+                            )}
                           </span>
                           <button 
                             onClick={() => removeUploadedPhoto(photo.id)}
@@ -1958,35 +2220,52 @@ CandleScan FÁCIL • Análise didática com IA — use sempre stop loss.
             )}
 
             {/* Core activation action */}
-            <div className="pt-2 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 border-t border-zinc-800">
+            <div className="pt-2 flex flex-col gap-4 border-t border-zinc-800">
               <div className="flex items-center gap-1.5 text-xs text-zinc-450">
                 <Sparkles className="h-3.5 w-3.5 text-rose-500 shrink-0" />
-                <span>Nossa Inteligência Artificial vai traduzir o desenho das velas de preço em português simples!</span>
+                <span>
+                  {uploadedPhotos.length > 1
+                    ? "Todos os prints serão enviados em ordem para a IA entender a evolução do preço."
+                    : "A IA traduz o gráfico em português simples — com investimento preenchido, vira gerente do seu trade."}
+                </span>
               </div>
-              <button
-                id="main-analyze-btn"
-                onClick={handleAnalyzeGraph}
-                disabled={isAnalyzing || uploadedPhotos.length === 0}
-                className={`py-3 px-6 rounded-xl font-bold text-sm tracking-wide transition-all shadow flex items-center justify-center gap-2 cursor-pointer ${
-                  uploadedPhotos.length === 0
-                    ? "bg-zinc-800 border border-zinc-700 text-zinc-500 cursor-not-allowed"
-                    : isAnalyzing
-                    ? "bg-rose-950 border border-rose-500 text-rose-200 cursor-wait"
-                    : "bg-rose-500 hover:bg-rose-600 text-white hover:shadow-lg active:scale-95"
-                }`}
-              >
-                {isAnalyzing ? (
-                  <>
-                    <RefreshCw className="h-4 w-4 animate-spin text-rose-400" />
-                    IA Traduzindo Gráfico...
-                  </>
-                ) : (
-                  <>
-                    <Compass className="h-4 w-4" />
-                    Traduzir Gráfico Enviado IP
-                  </>
+              <div className="flex flex-col sm:flex-row flex-wrap gap-2.5 sm:justify-end">
+                {hasNewEvolutionPhotos && (
+                  <button
+                    type="button"
+                    onClick={handleUpdateWithNewPrint}
+                    disabled={isAnalyzing}
+                    className="py-3 px-5 rounded-xl font-bold text-sm tracking-wide transition-all flex items-center justify-center gap-2 border-2 border-sky-500/70 bg-sky-500/15 text-sky-200 hover:bg-sky-500/25 active:scale-95 disabled:opacity-60"
+                  >
+                    <LineChart className="h-4 w-4" />
+                    Atualizar com novo Print
+                  </button>
                 )}
-              </button>
+                <button
+                  id="main-analyze-btn"
+                  onClick={handleAnalyzeGraph}
+                  disabled={isAnalyzing || uploadedPhotos.length === 0}
+                  className={`py-3 px-6 rounded-xl font-bold text-sm tracking-wide transition-all shadow flex items-center justify-center gap-2 cursor-pointer ${
+                    uploadedPhotos.length === 0
+                      ? "bg-zinc-800 border border-zinc-700 text-zinc-500 cursor-not-allowed"
+                      : isAnalyzing
+                      ? "bg-rose-950 border border-rose-500 text-rose-200 cursor-wait"
+                      : "bg-rose-500 hover:bg-rose-600 text-white hover:shadow-lg active:scale-95"
+                  }`}
+                >
+                  {isAnalyzing ? (
+                    <>
+                      <RefreshCw className="h-4 w-4 animate-spin text-rose-400" />
+                      IA Traduzindo Gráfico...
+                    </>
+                  ) : (
+                    <>
+                      <Compass className="h-4 w-4" />
+                      Traduzir Gráfico
+                    </>
+                  )}
+                </button>
+              </div>
             </div>
 
           </div>
@@ -2051,6 +2330,16 @@ CandleScan FÁCIL • Análise didática com IA — use sempre stop loss.
                             <span className="text-zinc-500">
                               {item.timestamp}
                             </span>
+                            {(item.evolutionSnapshots?.length ?? 0) > 1 && (
+                              <span className="text-[9px] px-1.5 py-0.5 rounded bg-sky-500/15 text-sky-400 border border-sky-500/30">
+                                {item.evolutionSnapshots!.length} evoluções
+                              </span>
+                            )}
+                            {item.isLiveTrade && (
+                              <span className="text-[9px] px-1.5 py-0.5 rounded bg-emerald-500/10 text-emerald-400 border border-emerald-500/25">
+                                Trade vivo
+                              </span>
+                            )}
                           </div>
                         </div>
 
@@ -2129,32 +2418,93 @@ CandleScan FÁCIL • Análise didática com IA — use sempre stop loss.
             className={`md:col-span-12 rounded-xl border-2 overflow-hidden bg-[#131722] ${actionCfg.glow} ${actionCfg.bg}`}
           >
             <div className="px-5 py-4 border-b border-[#363a45] bg-[#1e222d]/80 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-              <div className="flex items-center gap-3">
+              <div className="flex items-center gap-3 flex-wrap">
                 <div className={`px-3 py-1 rounded-lg text-[10px] font-black uppercase tracking-widest ${actionCfg.pill}`}>
-                  Ticket de Operação
+                  {isPositioned() ? "Meu Trade ao Vivo" : "Ticket de Operação"}
                 </div>
                 <motion.span
                   initial={{ scale: 0.9 }}
                   animate={{ scale: 1 }}
                   className={`text-4xl sm:text-5xl font-black tracking-tighter font-sans ${actionCfg.light} drop-shadow-[0_0_20px_currentColor]`}
                 >
-                  {actionCfg.label}
+                  {isPositioned() && activeAnalysis.statusTrade
+                    ? activeAnalysis.statusTrade
+                    : actionCfg.label}
                 </motion.span>
               </div>
-              <div
-                className={`flex flex-col items-end gap-1 px-4 py-2.5 rounded-lg border text-right ${operationViability.className} ${operationViability.pulse ? "animate-pulse" : ""}`}
-              >
-                <span className="text-[11px] font-black uppercase tracking-widest leading-tight">
-                  Viabilidade da Operação
-                </span>
-                <span className="text-sm sm:text-base font-black uppercase tracking-wide">
-                  {operationViability.label}
-                </span>
-                <span className="text-[10px] font-mono tabular-nums opacity-90">
-                  {operationViability.sublabel}
-                </span>
+              <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2">
+                {tradeStatusBadge && (
+                  <div
+                    className={`flex flex-col items-center justify-center gap-0.5 px-4 py-2.5 rounded-lg border text-center min-w-[140px] ${tradeStatusBadge.className} ${tradeStatusBadge.pulse ? "animate-pulse" : ""}`}
+                  >
+                    <span className="text-[10px] font-black uppercase tracking-widest opacity-90">
+                      Gerente IA
+                    </span>
+                    <span className="text-sm font-black uppercase tracking-wide">
+                      {tradeStatusBadge.label}
+                    </span>
+                  </div>
+                )}
+                {!isPositioned() && (
+                  <div
+                    className={`flex flex-col items-end gap-1 px-4 py-2.5 rounded-lg border text-right ${operationViability.className} ${operationViability.pulse ? "animate-pulse" : ""}`}
+                  >
+                    <span className="text-[11px] font-black uppercase tracking-widest leading-tight">
+                      Viabilidade da Operação
+                    </span>
+                    <span className="text-sm sm:text-base font-black uppercase tracking-wide">
+                      {operationViability.label}
+                    </span>
+                    <span className="text-[10px] font-mono tabular-nums opacity-90">
+                      {operationViability.sublabel}
+                    </span>
+                  </div>
+                )}
               </div>
             </div>
+
+            {isPositioned() && roiData && (
+              <div
+                className={`mx-4 md:mx-5 mt-4 rounded-xl border-2 p-4 md:p-5 ${
+                  roiData.isPositive
+                    ? "border-[#26a69a]/60 bg-[#26a69a]/10 shadow-[0_0_28px_rgba(38,166,154,0.25)]"
+                    : "border-[#ef5350]/60 bg-[#ef5350]/10 shadow-[0_0_28px_rgba(239,83,80,0.25)]"
+                }`}
+              >
+                <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+                  <div>
+                    <span className="text-[10px] font-black uppercase tracking-widest text-zinc-400 block mb-1">
+                      Lucro em tempo real
+                    </span>
+                    <p
+                      className={`text-3xl md:text-4xl font-mono font-black tabular-nums ${
+                        roiData.isPositive ? "text-[#26a69a]" : "text-[#ef5350]"
+                      }`}
+                    >
+                      {roiData.isPositive ? "+" : ""}
+                      R$ {Math.abs(roiData.totalProfit).toFixed(2).replace(".", ",")}
+                    </p>
+                    <p className="text-sm text-zinc-400 mt-1 font-mono">
+                      ROI:{" "}
+                      <strong className={roiData.isPositive ? "text-[#26a69a]" : "text-[#ef5350]"}>
+                        {roiData.isPositive ? "+" : ""}
+                        {roiData.percentage.toFixed(2).replace(".", ",")}%
+                      </strong>
+                      {" · "}
+                      Preço atual: {formatDisplayPrice(activeAnalysis.precoAtualEstimado || String(getCurrentMarketPrice() ?? ""))}
+                    </p>
+                  </div>
+                  <div className="text-[11px] text-zinc-500 md:text-right max-w-sm">
+                    Compra:{" "}
+                    <strong className="text-zinc-300">
+                      R$ {buildDadosCompra()!.precoEntrada.toFixed(2).replace(".", ",")}
+                    </strong>
+                    {" · "}
+                    Investido: R$ {getValorInvestidoTotal().toFixed(2).replace(".", ",")}
+                  </div>
+                </div>
+              </div>
+            )}
 
             <div className="p-4 md:p-5 grid grid-cols-1 md:grid-cols-3 gap-3 md:gap-4">
               {/* Entrada */}

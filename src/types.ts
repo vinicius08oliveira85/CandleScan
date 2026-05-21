@@ -5,6 +5,17 @@ export interface SyntheticCandle {
   close: number;
 }
 
+export type TradeStatus =
+  | "MANTER"
+  | "VENDER AGORA"
+  | "REALIZAR PARCIAL"
+  | "STOP ATIVADO";
+
+export interface DadosCompra {
+  precoEntrada: number;
+  quantidade: number;
+}
+
 export interface ChartAnalysis {
   ativoCooptado: string;
   tempoGrafico: string;
@@ -25,6 +36,9 @@ export interface ChartAnalysis {
   syntheticCandles?: SyntheticCandle[];
   rompimentoDetectado?: boolean;
   rompimentoComentario?: string;
+  /** Gerente de trade — preenchido quando há posição aberta */
+  statusTrade?: TradeStatus;
+  precoAtualEstimado?: string;
 }
 
 export interface MultiChartAnalysis {
@@ -73,6 +87,13 @@ export interface SavedAnalysisImage {
   base64: string;
 }
 
+/** Um momento da evolução do trade (série de prints) */
+export interface EvolutionSnapshot {
+  capturedAt: string;
+  label: string;
+  images: SavedAnalysisImage[];
+}
+
 export interface SavedAnalysis {
   id: string;
   timestamp: string;
@@ -83,8 +104,16 @@ export interface SavedAnalysis {
   nivelConfianca: string;
   analysis: ChartAnalysis;
   imageCount: number;
-  /** Prints em base64 para consulta offline no histórico */
+  /** Todos os prints da sessão em ordem cronológica */
   previewImages?: SavedAnalysisImage[];
+  /** Evolução por atualizações (cada clique em "Atualizar com novo Print") */
+  evolutionSnapshots?: EvolutionSnapshot[];
+  /** Dados da compra para acompanhamento vivo */
+  dadosCompra?: DadosCompra;
+  /** Valor total investido (R$) — espelha o input do usuário */
+  valorInvestidoTotal?: number;
+  isLiveTrade?: boolean;
+  lastUpdatedAt?: string;
 }
 
 /** Evento PWA beforeinstallprompt (Chromium) */
