@@ -1204,95 +1204,36 @@ export default function App() {
 
   type TradeLineVariant = "entry" | "stop" | "target";
 
-  const renderTradePriceLine = (
-    y: number | null,
-    variant: TradeLineVariant,
-    priceText: string,
-    shortLabel: string
-  ) => {
-    if (y === null) return null;
-
-    const config = {
-      entry: {
-        line: "border-amber-400 shadow-[0_0_22px_rgba(245,158,11,0.95),0_0_44px_rgba(245,158,11,0.4)]",
-        badge: "bg-[#131722]/95 border-amber-400/70 text-amber-300 shadow-[0_0_18px_rgba(245,158,11,0.65)]",
-        iconBox: "bg-amber-500/25 text-amber-300 ring-1 ring-amber-400/50",
-        Icon: CircleDot,
-        z: 16,
-      },
-      stop: {
-        line: "border-[#ef5350] shadow-[0_0_28px_rgba(239,83,80,1),0_0_56px_rgba(239,83,80,0.55)] drop-shadow-[0_0_12px_rgba(239,83,80,0.9)]",
-        badge: "bg-[#0B0E14]/95 border-[#ef5350]/80 text-[#ef5350] shadow-[0_0_24px_rgba(239,83,80,0.75)]",
-        iconBox: "bg-[#ef5350]/30 text-[#ef5350] ring-2 ring-[#ef5350]/60 shadow-[0_0_12px_rgba(239,83,80,0.8)]",
-        Icon: Shield,
-        z: 17,
-      },
-      target: {
-        line: "border-[#26a69a] shadow-[0_0_28px_rgba(38,166,154,1),0_0_56px_rgba(38,166,154,0.55)] drop-shadow-[0_0_12px_rgba(38,166,154,0.9)]",
-        badge: "bg-[#0B0E14]/95 border-[#26a69a]/80 text-[#26a69a] shadow-[0_0_24px_rgba(38,166,154,0.75)]",
-        iconBox: "bg-[#26a69a]/30 text-[#26a69a] ring-2 ring-[#26a69a]/60 shadow-[0_0_12px_rgba(38,166,154,0.8)]",
-        Icon: Trophy,
-        z: 15,
-      },
-    }[variant];
-
-    const { Icon } = config;
-
-    return (
-      <motion.div
-        key={`${variant}-${y}`}
-        initial={{ width: 0, opacity: 0 }}
-        animate={{ width: "100%", opacity: 1 }}
-        transition={{ duration: 0.8, ease: "easeOut" }}
-        className={`absolute left-0 right-0 border-t-[3px] pointer-events-none ${config.line}`}
-        style={{ bottom: `${y}%`, zIndex: config.z }}
-      >
-        <motion.span
-          initial={{ scale: 0, x: -10 }}
-          animate={{ scale: 1, x: 0 }}
-          transition={{ type: "spring", delay: 0.3, stiffness: 280, damping: 18 }}
-          className={`absolute right-1 -translate-y-1/2 pl-1.5 pr-2.5 py-1.5 rounded-lg text-[10px] font-mono font-bold whitespace-nowrap flex items-center gap-2 border backdrop-blur-md ${config.badge}`}
-        >
-          <span className={`p-2 rounded-md shrink-0 ${config.iconBox}`}>
-            <Icon className="h-5 w-5 stroke-[2.5px]" />
-          </span>
-          <span>
-            <span className="block text-[8px] uppercase tracking-widest opacity-80">{shortLabel}</span>
-            <span className="tabular-nums">{formatDisplayPrice(priceText)}</span>
-          </span>
-        </motion.span>
-      </motion.div>
-    );
+  const spreadLegendY = (
+    items: { id: string; y: number }[],
+    minGap = 14
+  ): Record<string, number> => {
+    const sorted = [...items].sort((a, b) => a.y - b.y);
+    const out: Record<string, number> = {};
+    let last = -minGap;
+    for (const item of sorted) {
+      let y = item.y;
+      if (y - last < minGap) y = last + minGap;
+      y = Math.min(90, Math.max(10, y));
+      out[item.id] = y;
+      last = y;
+    }
+    return out;
   };
 
-  const renderPriceLevelLine = (
+  const renderChartHLine = (
     y: number | null,
     lineClass: string,
-    badgeClass: string,
-    label: string,
-    icon: React.ReactNode,
-    zIndex = 8
+    zIndex: number,
+    key: string
   ) => {
     if (y === null) return null;
     return (
-      <motion.div
-        key={`${label}-${y}`}
-        initial={{ width: 0, opacity: 0 }}
-        animate={{ width: "100%", opacity: 1 }}
-        transition={{ duration: 0.8, ease: "easeOut" }}
-        className={`absolute left-0 right-0 border-t border-dashed pointer-events-none ${lineClass}`}
+      <div
+        key={key}
+        className={`absolute left-0 right-0 border-t pointer-events-none ${lineClass}`}
         style={{ bottom: `${y}%`, zIndex }}
-      >
-        <motion.span
-          initial={{ scale: 0, x: -10 }}
-          animate={{ scale: 1, x: 0 }}
-          transition={{ type: "spring", delay: 0.3, stiffness: 280, damping: 18 }}
-          className={`absolute right-1 -translate-y-1/2 px-2 py-0.5 rounded text-[8px] font-mono border backdrop-blur-sm flex items-center gap-1 ${badgeClass}`}
-        >
-          {icon}
-          {label}
-        </motion.span>
-      </motion.div>
+      />
     );
   };
 
@@ -1311,28 +1252,62 @@ export default function App() {
     const tendenciaRaw = activeAnalysis.tendencia;
     const momentoRaw = activeAnalysis.momento;
 
-    const rawCandles =
+    const rawCandlesSource =
       activeAnalysis.syntheticCandles && activeAnalysis.syntheticCandles.length >= 2
         ? activeAnalysis.syntheticCandles.slice(-10)
         : generateDynamicCandles(tendenciaRaw, momentoRaw);
 
-    const priceLevels = [
-      ...rawCandles.flatMap((c) => [c.open, c.close, c.high, c.low]),
-      parsePrice(activeAnalysis.resistencia),
-      parsePrice(activeAnalysis.suporte),
+    const tradeNums = [
       parsePrice(activeAnalysis.pontoEntrada),
       parsePrice(activeAnalysis.stopLoss),
       parsePrice(activeAnalysis.alvo),
-    ].filter((p): p is number => p !== null);
+      parsePrice(activeAnalysis.resistencia),
+      parsePrice(activeAnalysis.suporte),
+      parsePrice(activeAnalysis.precoAtualEstimado),
+      getEffectiveDadosCompra()?.precoEntrada ?? null,
+    ].filter((p): p is number => p !== null && p > 0);
 
-    const minRawPrice = Math.min(...priceLevels);
-    const maxRawPrice = Math.max(...priceLevels);
-    const rawPriceRange = maxRawPrice - minRawPrice || 1;
+    const candleNums = rawCandlesSource.flatMap((c) => [c.open, c.close, c.high, c.low]);
+    const candleMax = Math.max(...candleNums);
+    const candleMin = Math.min(...candleNums);
+    const candlesLookSynthetic =
+      tradeNums.length > 0 &&
+      candleMax <= 150 &&
+      candleMin >= 0 &&
+      Math.max(...tradeNums) > candleMax * 1.2;
 
+    let chartMin: number;
+    let chartMax: number;
+    let scaledCandles = rawCandlesSource;
+
+    if (candlesLookSynthetic) {
+      const tMin = Math.min(...tradeNums);
+      const tMax = Math.max(...tradeNums);
+      const span = tMax - tMin || 1;
+      const pad = span * 0.15;
+      chartMin = tMin - pad;
+      chartMax = tMax + pad;
+      const cRange = candleMax - candleMin || 1;
+      scaledCandles = rawCandlesSource.map((c) => ({
+        open: chartMin + ((c.open - candleMin) / cRange) * (chartMax - chartMin),
+        close: chartMin + ((c.close - candleMin) / cRange) * (chartMax - chartMin),
+        high: chartMin + ((c.high - candleMin) / cRange) * (chartMax - chartMin),
+        low: chartMin + ((c.low - candleMin) / cRange) * (chartMax - chartMin),
+      }));
+    } else {
+      const allNums = [...candleNums, ...tradeNums];
+      chartMin = Math.min(...allNums);
+      chartMax = Math.max(...allNums);
+      const pad = (chartMax - chartMin) * 0.1 || 0.5;
+      chartMin -= pad;
+      chartMax += pad;
+    }
+
+    const chartRange = chartMax - chartMin || 1;
     const normalizePrice = (price: number) =>
-      ((price - minRawPrice) / rawPriceRange) * 100;
+      ((price - chartMin) / chartRange) * 100;
 
-    const activeCandles = rawCandles.map((c) => ({
+    const activeCandles = scaledCandles.map((c) => ({
       open: normalizePrice(c.open),
       close: normalizePrice(c.close),
       high: normalizePrice(c.high),
@@ -1341,7 +1316,7 @@ export default function App() {
 
     const getRelativeY = (price: number | null) => {
       if (price === null) return null;
-      return Math.max(0, Math.min(100, normalizePrice(price)));
+      return Math.max(2, Math.min(98, normalizePrice(price)));
     };
 
     const resistanceY = getRelativeY(parsePrice(activeAnalysis.resistencia));
@@ -1349,6 +1324,7 @@ export default function App() {
     const entryY = getRelativeY(parsePrice(activeAnalysis.pontoEntrada));
     const stopY = getRelativeY(parsePrice(activeAnalysis.stopLoss));
     const targetY = getRelativeY(parsePrice(activeAnalysis.alvo));
+    const myEntryY = getRelativeY(getEffectiveDadosCompra()?.precoEntrada ?? null);
 
     const priceLabel = (value: string) => formatDisplayPrice(value);
 
@@ -1366,7 +1342,7 @@ export default function App() {
     const priceTickCount = 5;
     const priceTicks = Array.from({ length: priceTickCount }, (_, i) => {
       const ratio = i / (priceTickCount - 1);
-      return maxRawPrice - ratio * rawPriceRange;
+      return chartMax - ratio * chartRange;
     });
 
     const intervalMin = parseChartIntervalMinutes(activeAnalysis.tempoGrafico || "5 Minutos");
@@ -1379,26 +1355,66 @@ export default function App() {
       return t.toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" });
     });
 
-    const chartBody = (
-      <div className="flex items-end gap-2 h-full w-full justify-between pt-6 pb-1 px-1 relative select-none">
-        {renderPriceLevelLine(
-          resistanceY,
-          "border-[#ef5350]/35",
-          "bg-[#1e222d]/90 border-[#ef5350]/20 text-[#ef5350]/70",
-          `TETO ${priceLabel(activeAnalysis.resistencia)}`,
-          <TrendingDown className="h-3 w-3 opacity-60" />
-        )}
-        {renderPriceLevelLine(
-          supportY,
-          "border-[#26a69a]/35",
-          "bg-[#1e222d]/90 border-[#26a69a]/20 text-[#26a69a]/70",
-          `PISO ${priceLabel(activeAnalysis.suporte)}`,
-          <TrendingUp className="h-3 w-3 opacity-60" />
-        )}
-        {renderTradePriceLine(targetY, "target", activeAnalysis.alvo, "ALVO")}
-        {renderTradePriceLine(entryY, "entry", activeAnalysis.pontoEntrada, "ENTRADA")}
-        {renderTradePriceLine(stopY, "stop", activeAnalysis.stopLoss, "STOP")}
+    type LegendItem = {
+      id: string;
+      y: number;
+      label: string;
+      price: string;
+      lineClass: string;
+      chipClass: string;
+    };
 
+    const legendCandidates: { id: string; y: number | null; label: string; price: string; lineClass: string; chipClass: string }[] = [
+      { id: "target", y: targetY, label: "ALVO", price: activeAnalysis.alvo, lineClass: "border-[#26a69a]/80", chipClass: "bg-[#26a69a]/15 border-[#26a69a]/50 text-[#26a69a]" },
+      { id: "entry", y: entryY, label: "ENTRADA", price: activeAnalysis.pontoEntrada, lineClass: "border-amber-400/90", chipClass: "bg-amber-500/15 border-amber-400/50 text-amber-300" },
+      { id: "stop", y: stopY, label: "STOP", price: activeAnalysis.stopLoss, lineClass: "border-[#ef5350]/90", chipClass: "bg-[#ef5350]/15 border-[#ef5350]/50 text-[#ef5350]" },
+      { id: "res", y: resistanceY, label: "TETO", price: activeAnalysis.resistencia, lineClass: "border-[#ef5350]/35 border-dashed", chipClass: "bg-[#1e222d]/90 border-[#ef5350]/30 text-[#ef5350]/80" },
+      { id: "sup", y: supportY, label: "PISO", price: activeAnalysis.suporte, lineClass: "border-[#26a69a]/35 border-dashed", chipClass: "bg-[#1e222d]/90 border-[#26a69a]/30 text-[#26a69a]/80" },
+    ];
+
+    const validLegend = legendCandidates.filter(
+      (l): l is LegendItem & { y: number } =>
+        l.y !== null && !!l.price && l.price !== "Não identificada" && parsePrice(l.price) !== null
+    );
+
+    let uniqueLegend = validLegend.filter((item, idx, arr) => {
+      const dup = arr.findIndex(
+        (o, j) => j < idx && Math.abs(o.y - item.y) < 3 && o.label === item.label
+      );
+      return dup === -1;
+    });
+
+    const dadosUsuario = getEffectiveDadosCompra();
+    if (dadosUsuario && myEntryY !== null) {
+      const entradaIa = parsePrice(activeAnalysis.pontoEntrada);
+      const mesmoPreco =
+        entradaIa !== null && Math.abs(entradaIa - dadosUsuario.precoEntrada) < 0.02;
+      if (!mesmoPreco) {
+        uniqueLegend.push({
+          id: "myentry",
+          y: myEntryY,
+          label: getEffectiveTipoOperacao() === "venda" ? "VENDI" : "COMPREI",
+          price: formatInvestedPriceDisplay(dadosUsuario.precoEntrada),
+          lineClass: "border-sky-400/90",
+          chipClass: "bg-sky-500/15 border-sky-400/50 text-sky-200",
+        });
+      }
+    }
+
+    const spreadY = spreadLegendY(
+      uniqueLegend.map((l) => ({ id: l.id, y: l.y })),
+      13
+    );
+
+    const chartPlot = (
+      <div className="relative h-full w-full min-w-0 select-none">
+        {uniqueLegend.map((item) => (
+          <React.Fragment key={`lines-${item.id}`}>
+            {renderChartHLine(item.y, item.lineClass, 12, `line-${item.id}`)}
+          </React.Fragment>
+        ))}
+
+        <div className="absolute inset-x-0 bottom-0 top-0 flex items-end gap-0.5 sm:gap-1 px-0.5 z-10">
         {activeCandles.map((c, i) => {
           const isUp = c.close >= c.open;
           const range = c.high - c.low;
@@ -1406,7 +1422,6 @@ export default function App() {
           const ratio = range > 0 ? bodySize / range : 0;
           const isStrengthBull = isUp && ratio >= 0.70;
 
-          // Dimensions
           const bottomWick = c.low;
           const wickHeight = range;
           const bottomBody = Math.min(c.open, c.close);
@@ -1415,7 +1430,7 @@ export default function App() {
           return (
             <div 
               key={i} 
-              className="flex-1 h-full relative group/candle flex justify-center items-end"
+              className="flex-1 h-full relative group/candle flex justify-center items-end min-w-0"
             >
               {/* Dynamic Tooltip on Hover */}
               <div className="group-hover/candle:flex hidden absolute bottom-full mb-2 left-1/2 -translate-x-1/2 bg-[#121214] border border-[#27272a] text-zinc-100 p-2 text-[10px] w-48 flex-col z-30 pointer-events-none shadow-2xl transition-all duration-200 leading-normal gap-1 font-sans">
@@ -1484,40 +1499,86 @@ export default function App() {
             </div>
           );
         })}
+        </div>
+      </div>
+    );
+
+    const legendRail = (
+      <div
+        className="relative shrink-0 w-[4.25rem] sm:w-[5.5rem] md:w-[6.25rem] h-full border-l border-[#363a45]/40"
+        aria-hidden={uniqueLegend.length === 0}
+      >
+        {uniqueLegend.map((item) => (
+          <div
+            key={`badge-${item.id}`}
+            className={`absolute right-0.5 -translate-y-1/2 max-w-full px-1 py-0.5 rounded text-[7px] sm:text-[8px] font-mono font-bold leading-tight border truncate ${item.chipClass}`}
+            style={{ bottom: `${spreadY[item.id] ?? item.y}%` }}
+            title={`${item.label} ${priceLabel(item.price)}`}
+          >
+            <span className="block uppercase tracking-wide opacity-80">{item.label}</span>
+            <span className="tabular-nums block truncate">
+              {item.price.includes("R$") || item.price.includes("$")
+                ? item.price
+                : priceLabel(item.price)}
+            </span>
+          </div>
+        ))}
       </div>
     );
 
     return (
-      <div className="flex h-full w-full min-h-0 gap-0.5">
-        <div
-          className="flex flex-col shrink-0 w-11 sm:w-[3.25rem] h-full py-5 pb-6 pr-0.5 pointer-events-none border-r border-[#363a45]/40"
-          aria-label="Eixo de preço"
-        >
-          <span className="text-[7px] uppercase tracking-wider text-[#5c5f6a] text-center font-mono mb-1 shrink-0">
-            Preço
-          </span>
-          <div className="flex-1 flex flex-col justify-between text-[8px] sm:text-[9px] font-mono text-[#787b86] tabular-nums text-right min-h-0">
-            {priceTicks.map((p) => (
-              <span key={p} className="leading-none">
-                {formatAxisPriceNumber(p)}
+      <div className="flex flex-col h-full w-full min-h-0 gap-1.5">
+        {uniqueLegend.length > 0 && (
+          <div className="flex flex-wrap gap-1 shrink-0 md:hidden" aria-label="Legenda do gráfico">
+            {uniqueLegend.map((item) => (
+              <span
+                key={`m-${item.id}`}
+                className={`text-[8px] font-mono font-bold px-1.5 py-0.5 rounded border ${item.chipClass}`}
+              >
+                {item.label}{" "}
+                {item.price.includes("R$") || item.price.includes("$")
+                  ? item.price
+                  : priceLabel(item.price)}
               </span>
             ))}
           </div>
+        )}
+
+        <div className="flex flex-1 min-h-0 gap-0">
+          <div
+            className="flex flex-col shrink-0 w-12 sm:w-14 h-full py-1 pr-0.5 pointer-events-none border-r border-[#363a45]/40"
+            aria-label="Eixo de preço"
+          >
+            <span className="text-[7px] uppercase tracking-wider text-[#5c5f6a] text-center font-mono mb-0.5 shrink-0">
+              Preço
+            </span>
+            <div className="flex-1 flex flex-col justify-between text-[7px] sm:text-[8px] font-mono text-[#787b86] tabular-nums text-right min-h-0 leading-none">
+              {priceTicks.map((p) => (
+                <span key={p}>{formatAxisPriceNumber(p)}</span>
+              ))}
+            </div>
+          </div>
+
+          <div className="flex flex-1 min-w-0 min-h-0">
+            <div className="flex-1 relative min-h-0 min-w-0">{chartPlot}</div>
+            {uniqueLegend.length > 0 && (
+              <div className="hidden sm:block h-full">{legendRail}</div>
+            )}
+          </div>
         </div>
 
-        <div className="flex-1 flex flex-col min-w-0 min-h-0">
-          <div className="flex-1 relative min-h-0">{chartBody}</div>
+        <div className="shrink-0 pl-12 sm:pl-14">
           <div
-            className="flex justify-between gap-px pt-1.5 mt-0.5 border-t border-[#363a45]/60 shrink-0 text-[7px] sm:text-[8px] font-mono text-[#787b86] pointer-events-none"
+            className="flex justify-between gap-0.5 pt-1 border-t border-[#363a45]/60 text-[7px] sm:text-[8px] font-mono text-[#787b86] pointer-events-none"
             aria-label="Eixo de tempo"
           >
             {timeLabels.map((label, i) => (
-              <span key={`${label}-${i}`} className="flex-1 text-center truncate leading-tight">
+              <span key={`${label}-${i}`} className="flex-1 text-center truncate leading-tight min-w-0">
                 {label}
               </span>
             ))}
           </div>
-          <div className="text-[7px] text-[#5c5f6a] text-center font-mono mt-0.5 shrink-0 pointer-events-none">
+          <div className="text-[7px] text-[#5c5f6a] text-center font-mono mt-0.5 pointer-events-none truncate">
             Tempo · {activeAnalysis.tempoGrafico || "intervalo estimado"}
           </div>
         </div>
@@ -3262,27 +3323,28 @@ CandleScan FÁCIL • Análise didática com IA — use sempre stop loss.
             </div>
 
             {/* Candle illustration representing selected preset style graph */}
-            <div className="mt-2 text-xs text-zinc-500 space-y-3 max-w-5xl mx-auto w-full">
-              <div className="flex items-center justify-between">
-                <span className="font-bold text-[#fafafa] tracking-wide flex items-center gap-1.5">
-                  <Sliders className="h-3 w-3 text-rose-500" />
+            <div className="mt-2 text-xs text-zinc-500 space-y-2 max-w-5xl mx-auto w-full">
+              <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
+                <span className="font-bold text-[#fafafa] tracking-wide flex items-center gap-1.5 text-xs sm:text-sm">
+                  <Sliders className="h-3 w-3 text-rose-500 shrink-0" />
                   Módulo de Força do Preço (Mais Velas de Alta vs Queda)
                 </span>
-                <span className="text-[10px] text-zinc-500">Visualização de Força</span>
-              </div>
-              
-              {/* Dynamic visual graph mock */}
-              <div id="price-levels-guide-graph" className="h-72 sm:h-96 bg-[#0B0E14] border-2 border-[#363a45] rounded-lg p-4 md:p-5 relative overflow-hidden group/graph select-none shadow-inner shadow-black/40">
-                <div className="absolute top-2 right-2 flex items-center gap-1.5 select-none z-20">
-                  <div className="flex items-center gap-1 text-[9px] bg-emerald-950/60 border border-emerald-500/20 px-1.5 py-0.5 rounded-md text-emerald-400 font-bold">
-                    <span className="inline-block w-1.5 h-1.5 rounded-full bg-emerald-400 shadow-[0_0_8px_rgba(52,211,153,0.9)] animate-pulse"></span>
-                    ⚡ Vela de Força ({`>`}70% Corpo)
-                  </div>
-                  <div className="flex items-center gap-1 text-[9px] bg-black/60 border border-zinc-800 px-1.5 py-0.5 rounded-md text-zinc-400" title="As velas verdes indicam força compradora, as vermelhas indicam força vendedora.">
-                    <span className="inline-block w-1.5 h-1.5 rounded-full bg-emerald-500 animate-ping"></span>
+                <div className="flex flex-wrap gap-1.5 shrink-0">
+                  <span className="inline-flex items-center gap-1 text-[8px] sm:text-[9px] bg-emerald-950/60 border border-emerald-500/20 px-1.5 py-0.5 rounded-md text-emerald-400 font-bold">
+                    <span className="inline-block w-1.5 h-1.5 rounded-full bg-emerald-400 shrink-0"></span>
+                    Vela de Força ({`>`}70%)
+                  </span>
+                  <span className="inline-flex items-center gap-1 text-[8px] sm:text-[9px] bg-black/60 border border-zinc-800 px-1.5 py-0.5 rounded-md text-zinc-400">
+                    <span className="inline-block w-1.5 h-1.5 rounded-full bg-emerald-500 shrink-0"></span>
                     Força Recente
-                  </div>
+                  </span>
                 </div>
+              </div>
+
+              <div
+                id="price-levels-guide-graph"
+                className="h-72 sm:h-96 lg:h-[26rem] bg-[#0B0E14] border-2 border-[#363a45] rounded-lg p-2 sm:p-3 md:p-4 overflow-hidden group/graph select-none shadow-inner shadow-black/40"
+              >
                 {renderDummyGraph()}
               </div>
               <p className="text-[11px] text-[#787b86] leading-normal">
