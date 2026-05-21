@@ -3,6 +3,7 @@ import path from 'path';
 import { GoogleGenAI, Type } from '@google/genai';
 import dotenv from 'dotenv';
 
+dotenv.config({ path: '.env.local' });
 dotenv.config();
 
 const app = express();
@@ -283,14 +284,19 @@ app.post('/api/analyze-multi', async (req, res) => {
   }
 });
 
-// Setup client serving
-const distPath = path.join(process.cwd(), 'dist');
-app.use(express.static(distPath));
-// Serve index.html for SPA router fallbacks
-app.get('*', (req, res) => {
-  res.sendFile(path.join(distPath, 'index.html'));
-});
+// Em produção local, serve o frontend estático; na Vercel o static-build cuida disso.
+if (!process.env.VERCEL) {
+  const distPath = path.join(process.cwd(), 'dist');
+  app.use(express.static(distPath));
+  app.get('*', (req, res) => {
+    res.sendFile(path.join(distPath, 'index.html'));
+  });
+}
 
-app.listen(port, () => {
-  console.log(`Server listening at http://localhost:${port}`);
-});
+if (!process.env.VERCEL) {
+  app.listen(port, () => {
+    console.log(`Server listening at http://localhost:${port}`);
+  });
+}
+
+export = app;

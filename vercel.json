@@ -1,9 +1,10 @@
-PP{
+{
   "version": 2,
-  "public": "dist",
+  "buildCommand": "npm run build",
+  "outputDirectory": "dist",
   "builds": [
     {
-      "src": "vite.config.ts",
+      "src": "package.json",
       "use": "@vercel/static-build"
     },
     {
@@ -15,6 +16,13 @@ PP{
     {
       "src": "/api/(.*)",
       "dest": "/dist/server.cjs"
+    },
+    {
+      "handle": "filesystem"
+    },
+    {
+      "src": "/(.*)",
+      "dest": "/index.html"
     }
   ]
 }
