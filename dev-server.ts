@@ -5,9 +5,12 @@ import {
   getGeminiClient,
   buildGeminiParts,
   generateGeminiJson,
+  getGeminiModelList,
+  DEFAULT_GEMINI_MODEL,
   CHART_ANALYSIS_SCHEMA,
   MULTI_ANALYSIS_SCHEMA,
 } from './shared/geminiSchemas';
+import { geminiErrorResponseBody } from './shared/geminiErrors';
 
 try {
   dotenv.config({ path: '.env.local' });
@@ -37,10 +40,13 @@ const MULTI_SYSTEM_INSTRUCTION = `Você é um analista profissional de trading a
 Analise dois prints: M5 (lupa) e M15 (binóculo) do MESMO ativo. Use linguagem lúdica.`;
 
 app.get('/api/health', (_req, res) => {
+  const models = getGeminiModelList();
   res.status(200).json({
     ok: true,
     geminiConfigured: !!resolveGeminiApiKey(),
     vercelEnv: process.env.VERCEL_ENV || 'local',
+    defaultModel: DEFAULT_GEMINI_MODEL,
+    fallbackModels: models.slice(1),
   });
 });
 
@@ -71,12 +77,10 @@ app.post('/api/analyze', async (req, res) => {
 
     const parsed = JSON.parse(textOutput.trim());
     return res.json(parsed);
-  } catch (err: any) {
+  } catch (err: unknown) {
     console.error('Erro na rota /api/analyze:', err);
-    if (err?.code === 'MISSING_API_KEY' || /Nenhuma chave API/i.test(err?.message || '')) {
-      return res.status(400).json({ error: err.message, code: 'MISSING_API_KEY' });
-    }
-    return res.status(500).json({ error: err.message || 'Erro interno na análise.' });
+    const { httpStatus, payload } = geminiErrorResponseBody(err);
+    return res.status(httpStatus).json(payload);
   }
 });
 
@@ -105,12 +109,10 @@ app.post('/api/analyze-multi', async (req, res) => {
 
     const parsed = JSON.parse(textOutput.trim());
     return res.json(parsed);
-  } catch (err: any) {
+  } catch (err: unknown) {
     console.error('Erro na rota /api/analyze-multi:', err);
-    if (err?.code === 'MISSING_API_KEY') {
-      return res.status(400).json({ error: err.message, code: 'MISSING_API_KEY' });
-    }
-    return res.status(500).json({ error: err.message || 'Erro interno na análise múltipla.' });
+    const { httpStatus, payload } = geminiErrorResponseBody(err);
+    return res.status(httpStatus).json(payload);
   }
 });
 

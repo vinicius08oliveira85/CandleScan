@@ -1,6 +1,8 @@
 import { GoogleGenerativeAI, SchemaType } from '@google/generative-ai';
+import { getGeminiModelList, parseGeminiError, type GeminiErrorCode } from './geminiErrors';
 
 export { GoogleGenerativeAI, SchemaType };
+export { getGeminiModelList, DEFAULT_GEMINI_MODEL } from './geminiErrors';
 
 export const CHART_ANALYSIS_SCHEMA = {
   type: SchemaType.OBJECT,
@@ -130,8 +132,8 @@ export function getGeminiClient(userApiKey?: string): GoogleGenerativeAI {
   const key = resolveGeminiApiKey(userApiKey);
   if (!key) {
     const err = new Error(
-      'Nenhuma chave API do Gemini encontrada. Abra Configurações no app e cole sua chave, ou defina GEMINI_API_KEY na Vercel.'
-    ) as Error & { code?: string };
+      'Nenhuma chave API do Gemini encontrada. Abra Configurações no app e cole sua chave do Google AI Studio.'
+    ) as Error & { code?: GeminiErrorCode };
     err.code = 'MISSING_API_KEY';
     throw err;
   }
@@ -152,18 +154,27 @@ export function buildGeminiParts(promptText: string, images: ImageInput[]) {
   return parts;
 }
 
-/** Modelo padrão na API Google AI (1.5-flash foi descontinuado na v1beta). */
-export const DEFAULT_GEMINI_MODEL =
-  (typeof process !== 'undefined' && process.env?.GEMINI_MODEL?.trim()) || 'gemini-2.0-flash';
+function shouldTryNextModel(err: unknown): boolean {
+  const parsed = parseGeminiError(err);
+  return (
+    parsed.code === 'GEMINI_QUOTA_EXCEEDED' ||
+    parsed.code === 'GEMINI_MODEL_NOT_FOUND' ||
+    (typeof (err as { status?: number })?.status === 'number' &&
+      [404, 429].includes((err as { status: number }).status))
+  );
+}
 
-export async function generateGeminiJson(
+type GeminiResponseSchema = typeof CHART_ANALYSIS_SCHEMA | typeof MULTI_ANALYSIS_SCHEMA;
+
+async function generateWithModel(
   ai: GoogleGenerativeAI,
+  modelName: string,
   systemInstruction: string,
   parts: ReturnType<typeof buildGeminiParts>,
-  responseSchema: typeof CHART_ANALYSIS_SCHEMA
+  responseSchema: GeminiResponseSchema
 ): Promise<string> {
   const model = ai.getGenerativeModel({
-    model: DEFAULT_GEMINI_MODEL,
+    model: modelName,
     systemInstruction,
   });
 
@@ -180,4 +191,42 @@ export async function generateGeminiJson(
     throw new Error('O modelo Gemini retornou uma resposta vazia.');
   }
   return text;
+}
+
+export async function generateGeminiJson(
+  ai: GoogleGenerativeAI,
+  systemInstruction: string,
+  parts: ReturnType<typeof buildGeminiParts>,
+  responseSchema: GeminiResponseSchema
+): Promise<string> {
+  const models = getGeminiModelList();
+  const errors: { model: string; message: string }[] = [];
+
+  for (const modelName of models) {
+    try {
+      const text = await generateWithModel(ai, modelName, systemInstruction, parts, responseSchema);
+      if (modelName !== models[0]) {
+        console.warn(`[Gemini] Sucesso com modelo fallback: ${modelName}`);
+      }
+      return text;
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      errors.push({ model: modelName, message: msg.slice(0, 200) });
+      console.warn(`[Gemini] Falha em ${modelName}:`, msg.slice(0, 300));
+
+      if (!shouldTryNextModel(err)) {
+        throw err;
+      }
+    }
+  }
+
+  const allQuota = errors.every((e) => /429|quota|rate limit/i.test(e.message));
+  const finalErr = new Error(
+    allQuota
+      ? 'Cota da API Gemini esgotada em todos os modelos tentados.'
+      : 'Nenhum modelo Gemini disponível para esta análise.'
+  ) as Error & { code: GeminiErrorCode; triedModels: string[] };
+  finalErr.code = allQuota ? 'GEMINI_QUOTA_EXCEEDED' : 'GEMINI_MODEL_NOT_FOUND';
+  finalErr.triedModels = models;
+  throw finalErr;
 }

@@ -187,8 +187,13 @@ export default function App() {
     }
   }, [geminiApiKey]);
 
+  const hasPersonalApiKey = () => !!getResolvedApiKey();
+
   const canRunAnalysis = () =>
-    !!getResolvedApiKey() || serverHasGeminiKey === true;
+    hasPersonalApiKey() || serverHasGeminiKey === true;
+
+  const usesServerKeyFallback = () =>
+    !hasPersonalApiKey() && serverHasGeminiKey === true;
 
   const handleSaveApiKey = () => {
     const trimmed = geminiApiKey.trim();
@@ -217,12 +222,50 @@ export default function App() {
   };
 
   const ensureApiKeyForAnalysis = (): boolean => {
-    if (canRunAnalysis()) return true;
+    if (hasPersonalApiKey()) return true;
+    if (serverHasGeminiKey === true) return true;
     setAnalysisError(
-      "Chave API do Gemini não configurada. Abra a aba Configurações, cole sua chave do Google AI Studio e clique em Salvar — ou peça ao administrador para definir GEMINI_API_KEY na Vercel."
+      "Cole sua chave pessoal do Google AI Studio em Configurações e clique em Salvar. Cada usuário usa sua própria cota da API."
     );
     openSettingsTab();
     return false;
+  };
+
+  const formatAnalysisErrorMessage = (
+    res: Response,
+    errJson: { error?: string; code?: string; retryAfterSec?: number }
+  ) => {
+    const code = errJson.code;
+    const retrySec = errJson.retryAfterSec;
+
+    if (code === "GEMINI_QUOTA_EXCEEDED" || res.status === 429) {
+      const wait =
+        retrySec && retrySec > 0
+          ? ` Aguarde cerca de ${retrySec} segundos.`
+          : " Aguarde alguns minutos ou crie uma nova chave em Google AI Studio.";
+      return `Cota da API Gemini esgotada para esta chave.${wait}`;
+    }
+    if (code === "GEMINI_MODEL_NOT_FOUND" || res.status === 503) {
+      return "Modelos Gemini indisponíveis no momento. Tente novamente em alguns minutos.";
+    }
+    if (code === "MISSING_API_KEY" || res.status === 400) {
+      return "Configure sua chave pessoal em Configurações (Google AI Studio) e clique em Salvar.";
+    }
+    if (code === "GEMINI_INVALID_KEY" || res.status === 401 || res.status === 403) {
+      return "Chave API inválida ou sem permissão. Gere uma nova chave no Google AI Studio.";
+    }
+    if (code === "BOOT_ERROR") {
+      return "O backend não iniciou na Vercel. Aguarde o redeploy ou veja os Function Logs.";
+    }
+    if (res.status === 405) {
+      return "A rota /api/analyze não está ativa no servidor (deploy).";
+    }
+
+    const detail = errJson.error?.trim();
+    if (detail && detail.length < 280 && !detail.includes("generativelanguage.googleapis.com")) {
+      return detail;
+    }
+    return "Erro ao processar a análise. Tente novamente em instantes.";
   };
 
   const parseInvestedNumber = (value: string) => {
@@ -363,7 +406,12 @@ export default function App() {
       return { error: `Erro do servidor (${res.status}) sem detalhes.` };
     }
     try {
-      return JSON.parse(rawText) as { error?: string; code?: string; raw?: string };
+      return JSON.parse(rawText) as {
+        error?: string;
+        code?: string;
+        raw?: string;
+        retryAfterSec?: number;
+      };
     } catch {
       return { error: rawText.slice(0, 500) };
     }
@@ -391,25 +439,16 @@ export default function App() {
 
     if (!res.ok) {
       const errJson = await parseApiErrorResponse(res);
-      if (errJson.code === "MISSING_API_KEY" || res.status === 400) {
+      if (
+        errJson.code === "MISSING_API_KEY" ||
+        errJson.code === "GEMINI_INVALID_KEY" ||
+        res.status === 400 ||
+        res.status === 401 ||
+        res.status === 403
+      ) {
         openSettingsTab();
       }
-      const statusHint =
-        errJson.code === "BOOT_ERROR"
-          ? "O backend não iniciou na Vercel. Aguarde o redeploy ou veja os Function Logs no painel."
-          : errJson.code === "MISSING_API_KEY"
-          ? "Cole sua chave em Configurações e clique em Salvar Chave API."
-          : res.status === 405
-          ? "A rota /api/analyze não está ativa no servidor (deploy). Confira o backend na Vercel."
-          : res.status === 401 || res.status === 403
-          ? "Chave API inválida ou sem permissão. Gere uma nova chave no Google AI Studio."
-          : "Verifique a chave em Configurações ou GEMINI_API_KEY na Vercel.";
-      const detail = errJson.error || errJson.raw;
-      throw new Error(
-        detail
-          ? `${detail} (${res.status}) — ${statusHint}`
-          : `Erro do servidor (${res.status}). ${statusHint}`
-      );
+      throw new Error(formatAnalysisErrorMessage(res, errJson));
     }
 
     const data: ChartAnalysis = await res.json();
@@ -1616,10 +1655,15 @@ CandleScan FÁCIL • Análise didática com IA — use sempre stop loss.
             <div>
               <h3 className="font-extrabold text-base text-white">Configurações</h3>
               <p className="text-xs text-[#a1a1aa] mt-0.5">
-                Chave API Gemini — armazenada somente neste navegador (localStorage).
+                Recomendado: use sua chave pessoal do Google AI Studio (cota individual).
               </p>
             </div>
           </div>
+
+          <p className="text-[11px] text-rose-300/95 bg-rose-500/10 border border-rose-500/30 rounded-lg px-3 py-2 leading-relaxed">
+            <strong className="text-rose-200">Recomendado:</strong> cole sua chave pessoal abaixo.
+            Cada usuário usa sua própria cota da API — evita erro 429 por cota compartilhada.
+          </p>
 
           <div className="rounded-xl border border-zinc-800 bg-[#111112] p-4 space-y-4">
             <label className="block space-y-1.5">
@@ -1648,8 +1692,7 @@ CandleScan FÁCIL • Análise didática com IA — use sempre stop loss.
             </label>
 
             <p className="text-[11px] text-zinc-500 leading-relaxed">
-              A chave fica só no seu navegador e é enviada ao analisar o gráfico (prioridade sobre a
-              chave do servidor). Crie em{" "}
+              A chave fica só no seu navegador e tem prioridade ao analisar. Crie em{" "}
               <a
                 href="https://aistudio.google.com/app/apikey"
                 target="_blank"
@@ -1658,29 +1701,24 @@ CandleScan FÁCIL • Análise didática com IA — use sempre stop loss.
               >
                 Google AI Studio
               </a>
-              . Alternativa: definir <code className="text-zinc-400">GEMINI_API_KEY</code> em
-              Vercel → Settings → Environment Variables.
+              . Se aparecer erro de cota (429), aguarde alguns minutos ou gere uma nova chave.
             </p>
 
-            {serverHasGeminiKey === true && !getResolvedApiKey() && (
-              <p className="text-[11px] text-emerald-400/90 bg-emerald-500/10 border border-emerald-500/30 rounded-lg px-3 py-2">
-                O servidor (Vercel) detectou GEMINI_API_KEY no ambiente
-                {serverVercelEnv ? ` ${serverVercelEnv}` : ""}. Você pode analisar sem preencher aqui.
-              </p>
-            )}
-            {getResolvedApiKey() && serverHasGeminiKey === false && (
+            {hasPersonalApiKey() && (
               <p className="text-[11px] text-sky-300/90 bg-sky-500/10 border border-sky-500/30 rounded-lg px-3 py-2">
-                Chave salva neste navegador — será enviada ao traduzir o gráfico (funciona mesmo sem
-                variável na Vercel).
+                Chave pessoal ativa neste dispositivo — suas análises usam sua cota individual.
               </p>
             )}
-            {serverHasGeminiKey === false && !getResolvedApiKey() && (
+            {usesServerKeyFallback() && (
               <p className="text-[11px] text-amber-300/90 bg-amber-500/10 border border-amber-500/30 rounded-lg px-3 py-2">
-                Nenhuma chave no servidor
-                {serverVercelEnv ? ` (ambiente: ${serverVercelEnv})` : ""} nem neste navegador.
-                Cole sua chave abaixo e clique em Salvar — ou na Vercel marque{" "}
-                <strong className="text-amber-200">Production</strong> ao criar GEMINI_API_KEY (não só
-                Preview).
+                Sem chave pessoal: usando cota compartilhada do servidor
+                {serverVercelEnv ? ` (${serverVercelEnv})` : ""}. Pode falhar com 429 em horários de
+                pico — recomendamos colar sua própria chave acima.
+              </p>
+            )}
+            {serverHasGeminiKey === false && !hasPersonalApiKey() && (
+              <p className="text-[11px] text-amber-300/90 bg-amber-500/10 border border-amber-500/30 rounded-lg px-3 py-2">
+                Nenhuma chave configurada. Cole sua chave do Google AI Studio e clique em Salvar.
               </p>
             )}
 
